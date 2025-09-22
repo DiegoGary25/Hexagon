@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HEX//ARC</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="container">
+    <canvas id="game" width="480" height="640"></canvas>
+    <div id="score">00.00</div>
+    <div id="multiplierBar">
+      <div id="multiplierFill"></div>
+      <div id="multiplierText">1×</div>
+    </div>
+    <div id="banner" class="hidden">CHECKPOINT</div>
+    <div id="overlay" class="hidden">
+      <div id="overlayBox">
+        <div id="message">GAME OVER</div>
+        <button id="playAgain">PLAY AGAIN</button>
+      </div>
+    </div>
+  </div>
+  <script defer src="js/math.js"></script>
+  <script defer src="js/input.js"></script>
+  <script defer src="js/audio.js"></script>
+  <script defer src="js/game.js"></script>
+</body>
+</html>
