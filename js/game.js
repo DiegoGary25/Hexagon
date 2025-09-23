@@ -579,15 +579,15 @@
   }
 
   function updateChecksum(){
+    if(!Number.isFinite(score) || !Number.isFinite(multiplier)){
+      prepareReadyState();
+      return;
+    }
     var activeCount = 0;
     for(var i=0;i<ringPool.length;i++){
       if(ringPool[i].active){ activeCount++; }
     }
-    var next = ((activeCount << 3) ^ ((score * 17) | 0) ^ ((multiplier * 31) | 0) ^ checksumSalt) >>> 0;
-    if(checksum && checksum !== next){
-      prepareReadyState();
-    }
-    checksum = next;
+    checksum = ((activeCount << 3) ^ ((score * 17) | 0) ^ ((multiplier * 31) | 0) ^ checksumSalt) >>> 0;
   }
 
   function render(){
