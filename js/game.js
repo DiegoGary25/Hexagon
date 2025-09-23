@@ -14,8 +14,36 @@
   var HEIGHT = 640;
   var CENTER_X = WIDTH / 2;
   var CENTER_Y = HEIGHT / 2;
-  var BASE_PLAYER_RADIUS = 170;
-  var SPAWN_RADIUS = 300;
+
+  /* ========= EDIT HERE: GAME TUNABLES (safe: private in closure) ========= */
+  const TUNE = Object.freeze({
+    // Player orbit / feel
+    PLAYER_ORBIT_RADIUS_PX: 110,     // smaller circle → more time to see walls; was larger before
+    PLAYER_SIZE_PX: 12,              // side length of equilateral triangle; smaller by default
+    PLAYER_TURN_SPEED_RAD_S: 3.8,    // max angular speed (keep existing if already tuned)
+    PLAYER_TURN_ACCEL_RAD_S2: 16.0,  // angular acceleration toward target speed
+
+    // Spawns / pacing
+    SPAWN_MIN_INTERVAL_S: 0.42,      // ensure a bit more time between rings
+    SPAWN_MAX_INTERVAL_S: 0.62,      // slight randomization; difficulty may shorten later
+    DIFFICULTY_SPAWN_ACCEL: 0.985,   // multiplicative shrink per 10s (or your difficulty step)
+
+    // Arena motion (optional spin + zoom)
+    ENABLE_ARENA_SPIN: true,         // master toggle for spin/zoom behavior
+    SPIN_BASE_SPEED_RAD_S: 0.65,     // gentle spin; positive = clockwise
+    SPIN_SPEED_JITTER: 0.08,         // small sinusoidal modulation of spin
+    SPIN_JITTER_FREQ_HZ: 0.25,       // very slow wobble
+
+    ENABLE_ARENA_ZOOM: true,         // subtle breathing scale
+    ZOOM_AMPLITUDE: 0.05,            // 0.00..0.10 recommended
+    ZOOM_FREQ_HZ: 0.45,              // gentle; keep < 1Hz to avoid dizziness
+
+    // Visual margins
+    PLAYFIELD_PADDING_PX: 56         // keep walls off the HUD and border glow
+  });
+  /* ========= /TUNABLES ========= */
+
+  var PLAYFIELD_RADIUS = Math.min(WIDTH, HEIGHT) / 2 - TUNE.PLAYFIELD_PADDING_PX;
   var STEP_RATE = 1 / 120;
   var TWO_PI = Math.PI * 2;
   var ACCENT_COLORS = ['#3DE0B4', '#7F51FF', '#FF517A', '#D1FF51'];
@@ -49,7 +77,6 @@
   var multiplierDropTimer = 0;
   var nextCheckpoint = 20;
 
-  var spawnCooldown = 0.5;
   var logicalSides = 6;
   var displaySides = 6;
   var targetSides = 6;
@@ -58,7 +85,8 @@
   var morphDuration = 0;
   var spawnPauseTimer = 0;
   var gapGuideFade = 1;
-  var worldRotation = 0;
+  var worldSpinAngle = 0;
+  var worldZoom = 1;
   var spinVelocity = 0;
   var spinTimer = 0;
   var nextSpinAt = 12;
@@ -75,8 +103,8 @@
   var player = {
     angle: -Math.PI / 2,
     velocity: 0,
-    radius: BASE_PLAYER_RADIUS,
-    hitTolerance: 18
+    radius: TUNE.PLAYER_ORBIT_RADIUS_PX,
+    hitTolerance: TUNE.PLAYER_SIZE_PX * 0.85
   };
 
   var TAU = TWO_PI;
@@ -103,7 +131,7 @@
       moving: false,
       telegraph: 0,
       telegraphMax: 0,
-      radius: SPAWN_RADIUS,
+      radius: PLAYFIELD_RADIUS,
       laneCount: 6,
       gapIndex: 0,
       gapWidth: 1,
@@ -257,7 +285,7 @@
 
   function visitBlockedRanges(ring, iterator){
     var step = TWO_PI / ring.laneCount;
-    var base = ring.angleOffset + worldRotation;
+    var base = ring.angleOffset + worldSpinAngle;
     var open = math.clamp(ring.gapWidth, 0, 1) * step;
     var blocked = step - open;
     for(var i=0;i<ring.laneCount;i++){
@@ -280,7 +308,7 @@
     ring.moving = false;
     ring.telegraph = info.telegraph || 0.3;
     ring.telegraphMax = ring.telegraph;
-    ring.radius = SPAWN_RADIUS;
+    ring.radius = PLAYFIELD_RADIUS;
     ring.laneCount = info.laneCount || logicalSides;
     ring.gapIndex = info.gapIndex || 0;
     ring.gapWidth = info.gapWidth === undefined ? 1 : info.gapWidth;
@@ -367,7 +395,7 @@
     ctx.lineWidth = ring.thickness * 0.85;
     visitBlockedRanges(ring, function(start, end){
       ctx.beginPath();
-      ctx.arc(CENTER_X, CENTER_Y, SPAWN_RADIUS, start, end, false);
+      ctx.arc(0, 0, ring.radius, start - worldSpinAngle, end - worldSpinAngle, false);
       ctx.stroke();
     });
     ctx.restore();
@@ -385,18 +413,17 @@
     ctx.globalAlpha = nearPlayer ? 0.95 : 0.85;
     visitBlockedRanges(ring, function(start, end){
       ctx.beginPath();
-      ctx.arc(CENTER_X, CENTER_Y, ring.radius, start, end, false);
+      ctx.arc(0, 0, ring.radius, start - worldSpinAngle, end - worldSpinAngle, false);
       ctx.stroke();
     });
     ctx.restore();
 
     if(ring.moving && ring.guideStrength > 0.01 && survivalTime < 45){
       var step = TWO_PI / ring.laneCount;
-      var base = ring.angleOffset + worldRotation + ring.gapIndex * step + step * 0.5;
+      var base = ring.angleOffset + ring.gapIndex * step + step * 0.5;
       var arrowRadius = ring.radius + 36;
       var alpha = ring.guideStrength * (1 - survivalTime / 45);
       ctx.save();
-      ctx.translate(CENTER_X, CENTER_Y);
       ctx.rotate(base);
       ctx.globalAlpha = math.clamp(alpha, 0, 1);
       ctx.fillStyle = 'rgba(61,224,180,0.7)';
@@ -415,10 +442,8 @@
     displaySides = math.lerp(previousSides, targetSides, math.easeInOut(progress));
     var effectiveSides = Math.max(3, Math.round(displaySides));
     var angleStep = TWO_PI / effectiveSides;
-    var radius = BASE_PLAYER_RADIUS + 120;
+    var radius = TUNE.PLAYER_ORBIT_RADIUS_PX + (PLAYFIELD_RADIUS - TUNE.PLAYER_ORBIT_RADIUS_PX) * 0.68;
     ctx.save();
-    ctx.translate(CENTER_X, CENTER_Y);
-    ctx.rotate(worldRotation * 0.4);
     ctx.beginPath();
     for(var i=0;i<effectiveSides;i++){
       var angle = angleStep * i - Math.PI / 2;
@@ -432,6 +457,10 @@
     ctx.lineWidth = 6;
     ctx.shadowColor = 'rgba(61,224,180,0.35)';
     ctx.shadowBlur = 14;
+    ctx.stroke();
+    ctx.globalAlpha = 0.35;
+    ctx.lineWidth = 12;
+    ctx.shadowBlur = 30;
     ctx.stroke();
     ctx.restore();
   }
@@ -454,19 +483,22 @@
 
   function renderPlayer(){
     ctx.save();
-    ctx.translate(CENTER_X, CENTER_Y);
-    ctx.rotate(worldRotation);
     ctx.rotate(player.angle + Math.PI / 2);
     ctx.translate(0, -player.radius);
+    var side = TUNE.PLAYER_SIZE_PX;
+    var h = side * Math.sqrt(3) / 2;
+    ctx.beginPath();
+    ctx.moveTo(0, -2 * h / 3);
+    ctx.lineTo(side / 2, h / 3);
+    ctx.lineTo(-side / 2, h / 3);
+    ctx.closePath();
     ctx.fillStyle = '#ffffff';
     ctx.shadowColor = '#3DE0B4';
     ctx.shadowBlur = 12;
-    ctx.beginPath();
-    ctx.moveTo(0, -12);
-    ctx.lineTo(9, 12);
-    ctx.lineTo(-9, 12);
-    ctx.closePath();
     ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(61,224,180,0.85)';
+    ctx.stroke();
     ctx.restore();
   }
 
@@ -488,9 +520,9 @@
     var right = input.right();
     var inputAxis = (right ? 1 : 0) - (left ? 1 : 0);
     var difficulty = math.clamp(survivalTime / 60, 0, 1);
-    var maxSpeed = 3.6 + difficulty * 1.4;
-    var accel = 24 + difficulty * 10;
-    var damping = 28 - difficulty * 10;
+    var maxSpeed = TUNE.PLAYER_TURN_SPEED_RAD_S + difficulty * 1.2;
+    var accel = TUNE.PLAYER_TURN_ACCEL_RAD_S2 + difficulty * 8;
+    var damping = Math.max(10, 24 - difficulty * 8);
     player.velocity += inputAxis * accel * dt;
     if(player.velocity > maxSpeed){ player.velocity = maxSpeed; }
     if(player.velocity < -maxSpeed){ player.velocity = -maxSpeed; }
@@ -535,6 +567,7 @@
   }
 
   function scheduleSpin(){
+    if(!TUNE.ENABLE_ARENA_SPIN){ return; }
     spinTimer = 2 + math.randf(0, 0.8);
     spinVelocity = (math.randf() > 0.5 ? 1 : -1) * (0.9 + Math.min(1.8, survivalTime / 30));
     showBanner('SPIN');
@@ -553,23 +586,43 @@
   }
 
   function updateSpin(dt){
-    if(spinTimer > 0){
-      spinTimer -= dt;
-      worldRotation += spinVelocity * dt;
-      spinVelocity *= 0.985;
-      if(spinTimer <= 0){
-        spinVelocity = 0;
+    if(TUNE.ENABLE_ARENA_SPIN){
+      var jitter = Math.sin(globalTime * TWO_PI * TUNE.SPIN_JITTER_FREQ_HZ) * TUNE.SPIN_SPEED_JITTER;
+      var baseSpin = TUNE.SPIN_BASE_SPEED_RAD_S + jitter;
+      worldSpinAngle += baseSpin * dt;
+      if(spinTimer > 0){
+        spinTimer -= dt;
+        worldSpinAngle += spinVelocity * dt;
+        spinVelocity *= 0.985;
+        if(spinTimer <= 0){
+          spinVelocity = 0;
+        }
+      } else if(Math.abs(spinVelocity) > 0.0001){
+        worldSpinAngle += spinVelocity * dt;
+        spinVelocity *= 0.96;
+        if(Math.abs(spinVelocity) < 0.00005){
+          spinVelocity = 0;
+        }
+      }
+      if(worldSpinAngle > TAU || worldSpinAngle < -TAU){
+        worldSpinAngle = wrapAngle(worldSpinAngle);
       }
     } else {
-      worldRotation *= 0.995;
+      worldSpinAngle = 0;
+      spinTimer = 0;
+      spinVelocity = 0;
+    }
+
+    if(TUNE.ENABLE_ARENA_ZOOM){
+      worldZoom = 1 + TUNE.ZOOM_AMPLITUDE * Math.sin(globalTime * TWO_PI * TUNE.ZOOM_FREQ_HZ);
+    } else {
+      worldZoom = 1;
     }
   }
 
   function updateDifficulty(dt){
     gapGuideFade = math.clamp(1 - survivalTime / 40, 0, 1);
-    var targetCooldown = 0.6 - survivalTime * 0.003;
-    spawnCooldown = math.clamp(targetCooldown, 0.28, 0.6);
-    if(survivalTime > nextSpinAt){
+    if(TUNE.ENABLE_ARENA_SPIN && survivalTime > nextSpinAt){
       scheduleSpin();
       nextSpinAt += 12 + math.randf(0, 10);
     }
@@ -592,15 +645,25 @@
 
   function render(){
     renderBackground(globalTime);
+    ctx.save();
+    ctx.translate(CENTER_X, CENTER_Y);
+    if(TUNE.ENABLE_ARENA_SPIN){
+      ctx.rotate(worldSpinAngle);
+    }
+    if(TUNE.ENABLE_ARENA_ZOOM){
+      ctx.scale(worldZoom, worldZoom);
+    }
     renderArenaPolygon();
     renderRings();
     renderPlayer();
+    ctx.restore();
   }
 
   function resetRunData(){
     clearRings();
     player.angle = -Math.PI / 2;
     player.velocity = 0;
+    player.radius = TUNE.PLAYER_ORBIT_RADIUS_PX;
     survivalTime = 0;
     score = 0;
     multiplier = 1;
@@ -608,7 +671,6 @@
     multiplierPulseTimer = 0;
     multiplierDropTimer = 0;
     nextCheckpoint = 20;
-    spawnCooldown = 0.5;
     logicalSides = 6;
     displaySides = 6;
     previousSides = 6;
@@ -616,7 +678,8 @@
     morphTimer = 0;
     morphDuration = 0;
     spawnPauseTimer = 0;
-    worldRotation = 0;
+    worldSpinAngle = 0;
+    worldZoom = 1;
     spinVelocity = 0;
     spinTimer = 0;
     nextSpinAt = 12;
@@ -720,7 +783,7 @@
             speed: 125 + difficulty * 24,
             angleOffset: -Math.PI / 2,
             gapWidth: 1,
-            collapseTrigger: BASE_PLAYER_RADIUS + 36,
+            collapseTrigger: TUNE.PLAYER_ORBIT_RADIUS_PX + 36,
             collapseWidth: 0.35,
             guideStrength: gapGuideFade,
             patternTag: 'collapse'
@@ -740,7 +803,7 @@
             laneCount: lanes,
             gapIndex: flickerGap,
             altGapIndex: alt,
-            flickerTrigger: BASE_PLAYER_RADIUS + 70,
+            flickerTrigger: TUNE.PLAYER_ORBIT_RADIUS_PX + 70,
             speed: 120 + difficulty * 28,
             angleOffset: -Math.PI / 2,
             guideStrength: gapGuideFade,
@@ -789,21 +852,33 @@
     var activePattern = null;
     var nextSpawnAt = Infinity;
 
-    function schedule(time, delay){
-      nextSpawnAt = time + math.clamp(delay, 0.18, 1.2);
+    function computeInterval(time, minimum){
+      var steps = time > 0 ? time / 10 : 0;
+      var factor = Math.pow(TUNE.DIFFICULTY_SPAWN_ACCEL, steps);
+      var interval = math.randf(TUNE.SPAWN_MIN_INTERVAL_S, TUNE.SPAWN_MAX_INTERVAL_S) * factor;
+      if(typeof minimum === 'number'){
+        interval = Math.max(interval, minimum);
+      }
+      if(interval < 0.08){ interval = 0.08; }
+      return interval;
+    }
+
+    function schedule(time, minimum){
+      nextSpawnAt = time + computeInterval(time, minimum);
     }
 
     function reset(time){
       activePattern = null;
       lastPattern = '';
-      schedule(time, 0.45);
+      var firstInterval = Math.min(0.6, math.randf(TUNE.SPAWN_MIN_INTERVAL_S, TUNE.SPAWN_MAX_INTERVAL_S));
+      nextSpawnAt = time + Math.max(0.08, firstInterval);
     }
 
     function spawnNext(time){
       if(!activePattern){
         activePattern = choosePattern();
         if(!activePattern){
-          schedule(time, spawnCooldown);
+          schedule(time);
           return;
         }
       }
@@ -820,8 +895,10 @@
       spawn.guideStrength = spawn.guideStrength === undefined ? gapGuideFade : spawn.guideStrength;
       spawnRing(spawn);
       audio.playTick();
-      var delay = spawn.delay || activePattern.delay || spawnCooldown;
-      schedule(time, delay);
+      var minDelay = 0;
+      if(typeof spawn.delay === 'number'){ minDelay = spawn.delay; }
+      else if(activePattern && typeof activePattern.delay === 'number'){ minDelay = activePattern.delay; }
+      schedule(time, minDelay);
     }
 
     return {
@@ -831,10 +908,17 @@
         if(state !== 'RUN'){ return; }
         while(time >= nextSpawnAt){
           spawnNext(time);
+          if(nextSpawnAt <= time){
+            nextSpawnAt = time + 0.08;
+            break;
+          }
         }
       },
       defer: function(amount){
         nextSpawnAt += amount;
+        if(nextSpawnAt < survivalTime + 0.08){
+          nextSpawnAt = survivalTime + 0.08;
+        }
       }
     };
   })();
