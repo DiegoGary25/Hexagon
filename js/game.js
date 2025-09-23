@@ -375,7 +375,7 @@
     var radialGap = Math.abs(ring.radius - player.radius);
     if(radialGap > (ring.thickness * 0.6 + player.hitTolerance)){ return false; }
     var hit = false;
-    var pAngle = wrapAngle(player.angle);
+    var pAngle = wrapAngle(player.angle + (TUNE.ENABLE_ARENA_SPIN ? worldSpinAngle : 0));
     visitBlockedRanges(ring, function(start, end){
       if(hit){ return; }
       if(angleInRange(pAngle, start, end)){
