@@ -50,10 +50,19 @@
     return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
   }
 
+  var TAU = Math.PI * 2;
+
   function normAngle(a){
-    var tau = Math.PI * 2;
-    a = a % tau;
-    return a < 0 ? a + tau : a;
+    a = a % TAU;
+    return a < 0 ? a + TAU : a;
+  }
+
+  function angleInInterval(a, start, end){
+    a = normAngle(a);
+    start = normAngle(start);
+    end = normAngle(end);
+    if(start <= end){ return a >= start && a <= end; }
+    return a >= start || a <= end;
   }
 
   function eps(){
@@ -67,6 +76,7 @@
     lerp: function(a, b, t){ return lerp(a, b, t); },
     easeInOut: function(t){ return easeInOutCubic(t); },
     normAngle: function(a){ return normAngle(a); },
+    angleInInterval: function(a, start, end){ return angleInInterval(a, start, end); },
     eps: function(){ return eps(); }
   };
 
