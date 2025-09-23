@@ -69,13 +69,17 @@
 
   function toggleMute(){
     muted = !muted;
-    if(masterGain){
+    if(!context){
+      ensureContext();
+    }
+    if(masterGain && context){
       masterGain.gain.setValueAtTime(muted ? 0 : 0.35, context.currentTime || 0);
     }
     return muted;
   }
 
   var api = {
+    ensure: function(){ ensureContext(); },
     playStart: function(){ pulse({ frequency: 420, duration: 0.3, level: 0.5, sweep: 2, type: 'triangle' }); },
     playTick: function(){ pulse({ frequency: 720, duration: 0.12, level: 0.28, sweep: 1.1, type: 'square' }); },
     playMultUp: function(){ pulse({ frequency: 540, duration: 0.32, level: 0.45, sweep: 2.3, type: 'sawtooth' }); },
