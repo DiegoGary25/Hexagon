@@ -50,12 +50,24 @@
     return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
   }
 
+  function normAngle(a){
+    var tau = Math.PI * 2;
+    a = a % tau;
+    return a < 0 ? a + tau : a;
+  }
+
+  function eps(){
+    return 0.000001;
+  }
+
   var mathApi = {
     randf: function(min, max){ return randf(min, max); },
     randi: function(min, max){ return randi(min, max); },
     clamp: function(v, lo, hi){ return clamp(v, lo, hi); },
     lerp: function(a, b, t){ return lerp(a, b, t); },
-    easeInOut: function(t){ return easeInOutCubic(t); }
+    easeInOut: function(t){ return easeInOutCubic(t); },
+    normAngle: function(a){ return normAngle(a); },
+    eps: function(){ return eps(); }
   };
 
   Object.freeze(mathApi);
