@@ -15,38 +15,67 @@
   var CENTER_X = WIDTH / 2;
   var CENTER_Y = HEIGHT / 2;
 
-  /* ========= EDIT HERE: GAME TUNABLES (safe: private in closure) ========= */
+  /* ========= EDIT HERE: GAME TUNABLES ========= */
   const TUNE = Object.freeze({
-    // Player orbit / feel
-    PLAYER_ORBIT_RADIUS_PX: 110,     // smaller circle → more time to see walls; was larger before
-    PLAYER_SIZE_PX: 12,              // side length of equilateral triangle; smaller by default
-    PLAYER_TURN_SPEED_RAD_S: 3.8,    // max angular speed (keep existing if already tuned)
-    PLAYER_TURN_ACCEL_RAD_S2: 16.0,  // angular acceleration toward target speed
+    PLAYER_ORBIT_RADIUS_PX: 110,
+    PLAYER_SIZE_PX: 12,
+    PLAYER_TURN_SPEED_RAD_S: 3.8,
+    PLAYER_TURN_ACCEL_RAD_S2: 16.0,
 
-    // Spawns / pacing
-    SPAWN_MIN_INTERVAL_S: 0.5,      // ensure a bit more time between rings
-    SPAWN_MAX_INTERVAL_S: 0.5,      // slight randomization; difficulty may shorten later
-    DIFFICULTY_SPAWN_ACCEL: 0.985,   // multiplicative shrink per 10s (or your difficulty step)
+    // Obstacle spacing & pacing
+    SPAWN_MIN_INTERVAL_S: 0.42,
+    SPAWN_MAX_INTERVAL_S: 0.62,
+    DIFFICULTY_SPAWN_ACCEL: 0.985,
 
-    // Arena motion (optional spin + zoom)
-    ENABLE_ARENA_SPIN: true,         // master toggle for spin/zoom behavior
-    SPIN_BASE_SPEED_RAD_S: 0.65,     // gentle spin; positive = clockwise
-    SPIN_SPEED_JITTER: 0.08,         // small sinusoidal modulation of spin
-    SPIN_JITTER_FREQ_HZ: 0.25,       // very slow wobble
+    // Arena motion
+    ENABLE_ARENA_SPIN: true,
+    SPIN_BASE_SPEED_RAD_S: 0.65,
+    SPIN_SPEED_JITTER: 0.08,
+    SPIN_JITTER_FREQ_HZ: 0.25,
+    ENABLE_ARENA_ZOOM: true,
+    ZOOM_AMPLITUDE: 0.05,
+    ZOOM_FREQ_HZ: 0.45,
 
-    ENABLE_ARENA_ZOOM: true,         // subtle breathing scale
-    ZOOM_AMPLITUDE: 0.05,            // 0.00..0.10 recommended
-    ZOOM_FREQ_HZ: 0.45,              // gentle; keep < 1Hz to avoid dizziness
+    // NEW: obstacle thickness (radial width in pixels, pre-DPR)
+    OBSTACLE_THICKNESS_PX: 18,
 
-    // Visual margins
-    PLAYFIELD_PADDING_PX: -30         // keep walls off the HUD and border glow
+    PLAYFIELD_PADDING_PX: 56
   });
   /* ========= /TUNABLES ========= */
 
   var PLAYFIELD_RADIUS = Math.min(WIDTH, HEIGHT) / 2 - TUNE.PLAYFIELD_PADDING_PX;
   var STEP_RATE = 1 / 120;
   var TWO_PI = Math.PI * 2;
-  var ACCENT_COLORS = ['#3DE0B4', '#7F51FF', '#FF517A', '#D1FF51'];
+
+  var dpr = window.devicePixelRatio || 1;
+  var baseObstacleThickness = 0;
+  var obstacleThickness = 0;
+
+  var PALETTE = null;
+  var colorIndex = 0;
+
+  function clampObstacleThicknessPx(value){
+    return math.clamp(value, 6, 64);
+  }
+
+  function refreshObstacleThickness(){
+    baseObstacleThickness = clampObstacleThicknessPx(TUNE.OBSTACLE_THICKNESS_PX);
+    obstacleThickness = baseObstacleThickness * dpr;
+  }
+
+  refreshObstacleThickness();
+
+  function buildPalette(){
+    if(PALETTE){ return; }
+    var styles = getComputedStyle(document.documentElement);
+    var palette = [
+      styles.getPropertyValue('--accent1').trim() || '#3DE0B4',
+      styles.getPropertyValue('--accent2').trim() || '#7F51FF',
+      styles.getPropertyValue('--accent3').trim() || '#FF517A',
+      styles.getPropertyValue('--accent4').trim() || '#D1FF51'
+    ];
+    PALETTE = Object.freeze(palette);
+  }
 
   var container = null;
   var canvas = null;
@@ -60,7 +89,6 @@
   var multiplierText = null;
   var multiplierBar = null;
 
-  var dpr = window.devicePixelRatio || 1;
   var state = 'BOOT';
   var isStarting = false;
   var initCalled = false;
@@ -107,38 +135,23 @@
     hitTolerance: TUNE.PLAYER_SIZE_PX * 0.85
   };
 
-  var TAU = TWO_PI;
-
-  function wrapAngle(a){
-    while(a < 0){ a += TAU; }
-    while(a >= TAU){ a -= TAU; }
-    return a;
-  }
-
-  function angleInRange(angle, start, end){
-    var a = wrapAngle(angle);
-    var s = wrapAngle(start);
-    var e = wrapAngle(end);
-    if(s <= e){
-      return a >= s && a <= e;
-    }
-    return a >= s || a <= e;
-  }
-
   function createRing(){
     return {
       active: false,
       moving: false,
       telegraph: 0,
       telegraphMax: 0,
-      radius: PLAYFIELD_RADIUS,
-      laneCount: 6,
+      radiusOuter: 0,
+      radiusInner: 0,
+      thickness: 0,
+      sides: 0,
       gapIndex: 0,
-      gapWidth: 1,
-      angleOffset: -Math.PI / 2,
-      speed: 120,
-      thickness: 26,
-      colorIndex: 0,
+      gapSpanRatio: 1,
+      segAngle: 0,
+      baseAngle: -Math.PI / 2,
+      spawnSpin: 0,
+      speedPxPerS: 0,
+      color: '#ffffff',
       altGapIndex: -1,
       flickerTrigger: 0,
       flickerDone: false,
@@ -146,7 +159,8 @@
       collapseWidth: 1,
       guideStrength: 1,
       patternTag: 'base',
-      age: 0
+      age: 0,
+      dead: false
     };
   }
 
@@ -172,7 +186,27 @@
     ring.active = false;
     ring.moving = false;
     ring.telegraph = 0;
+    ring.telegraphMax = 0;
+    ring.radiusOuter = 0;
+    ring.radiusInner = 0;
+    ring.thickness = 0;
+    ring.sides = 0;
+    ring.gapIndex = 0;
+    ring.gapSpanRatio = 1;
+    ring.segAngle = 0;
+    ring.baseAngle = -Math.PI / 2;
+    ring.spawnSpin = 0;
+    ring.speedPxPerS = 0;
+    ring.color = '#ffffff';
+    ring.altGapIndex = -1;
+    ring.flickerTrigger = 0;
+    ring.flickerDone = false;
+    ring.collapseTrigger = 0;
+    ring.collapseWidth = 1;
+    ring.guideStrength = 0;
+    ring.patternTag = 'base';
     ring.age = 0;
+    ring.dead = false;
   }
 
   function clearRings(){
@@ -181,7 +215,27 @@
       ringPool[i].active = false;
       ringPool[i].moving = false;
       ringPool[i].telegraph = 0;
+      ringPool[i].telegraphMax = 0;
+      ringPool[i].radiusOuter = 0;
+      ringPool[i].radiusInner = 0;
+      ringPool[i].thickness = 0;
+      ringPool[i].sides = 0;
+      ringPool[i].gapIndex = 0;
+      ringPool[i].gapSpanRatio = 1;
+      ringPool[i].segAngle = 0;
+      ringPool[i].baseAngle = -Math.PI / 2;
+      ringPool[i].spawnSpin = 0;
+      ringPool[i].speedPxPerS = 0;
+      ringPool[i].color = '#ffffff';
+      ringPool[i].altGapIndex = -1;
+      ringPool[i].flickerTrigger = 0;
+      ringPool[i].flickerDone = false;
+      ringPool[i].collapseTrigger = 0;
+      ringPool[i].collapseWidth = 1;
+      ringPool[i].guideStrength = 0;
+      ringPool[i].patternTag = 'base';
       ringPool[i].age = 0;
+      ringPool[i].dead = false;
     }
   }
 
@@ -283,49 +337,52 @@
     }
   }
 
-  function visitBlockedRanges(ring, iterator){
-    var step = TWO_PI / ring.laneCount;
-    var base = ring.angleOffset + worldSpinAngle;
-    var open = math.clamp(ring.gapWidth, 0, 1) * step;
-    var blocked = step - open;
-    for(var i=0;i<ring.laneCount;i++){
-      var start = base + i * step;
-      var end = start + step;
-      if(i === ring.gapIndex){
-        if(blocked <= 0.0001){ continue; }
-        var cut = blocked * 0.5;
-        iterator(start, start + cut);
-        iterator(end - cut, end);
-      } else {
-        iterator(start, end);
-      }
-    }
-  }
-
   function spawnRing(info){
     var ring = getRing();
     if(!ring){ return; }
+    var sides = info.laneCount === undefined ? logicalSides : info.laneCount;
+    sides = Math.max(3, Math.round(sides));
+    var telegraph = info.telegraph === undefined ? 0.3 : info.telegraph;
     ring.moving = false;
-    ring.telegraph = info.telegraph || 0.3;
+    ring.telegraph = telegraph > 0 ? telegraph : 0;
     ring.telegraphMax = ring.telegraph;
-    ring.radius = PLAYFIELD_RADIUS;
-    ring.laneCount = info.laneCount || logicalSides;
-    ring.gapIndex = info.gapIndex || 0;
-    ring.gapWidth = info.gapWidth === undefined ? 1 : info.gapWidth;
-    ring.angleOffset = info.angleOffset === undefined ? -Math.PI / 2 : info.angleOffset;
-    ring.speed = info.speed;
-    ring.thickness = info.thickness || 26;
-    ring.colorIndex = (ring.colorIndex + 1) % ACCENT_COLORS.length;
-    ring.altGapIndex = info.altGapIndex === undefined ? -1 : info.altGapIndex;
+    ring.radiusOuter = PLAYFIELD_RADIUS;
+    ring.thickness = obstacleThickness;
+    ring.radiusInner = Math.max(0, ring.radiusOuter - ring.thickness);
+    ring.sides = sides;
+    ring.segAngle = TWO_PI / ring.sides;
+    ring.baseAngle = info.angleOffset === undefined ? -Math.PI / 2 : info.angleOffset;
+    ring.spawnSpin = worldSpinAngle;
+    var gapIndex = info.gapIndex === undefined ? 0 : info.gapIndex;
+    ring.gapIndex = ((gapIndex % ring.sides) + ring.sides) % ring.sides;
+    var gapRatio = info.gapWidth === undefined ? 1 : info.gapWidth;
+    ring.gapSpanRatio = math.clamp(gapRatio, 0, 1);
+    ring.speedPxPerS = typeof info.speed === 'number' ? info.speed : 120;
+    if(!PALETTE || PALETTE.length === 0){
+      ring.color = '#3DE0B4';
+    } else {
+      ring.color = PALETTE[(colorIndex++) % PALETTE.length];
+    }
+    if(info.altGapIndex === undefined){
+      ring.altGapIndex = -1;
+    } else {
+      var alt = info.altGapIndex;
+      ring.altGapIndex = ((alt % ring.sides) + ring.sides) % ring.sides;
+    }
     ring.flickerTrigger = info.flickerTrigger || 0;
     ring.flickerDone = false;
     ring.collapseTrigger = info.collapseTrigger || 0;
-    ring.collapseWidth = info.collapseWidth || ring.gapWidth;
+    var collapseRatio = info.collapseWidth === undefined ? ring.gapSpanRatio : info.collapseWidth;
+    ring.collapseWidth = math.clamp(collapseRatio, 0, 1);
     ring.patternTag = info.patternTag || 'base';
-    ring.guideStrength = info.guideStrength;
+    var guideStrength = info.guideStrength;
+    if(guideStrength === undefined){ guideStrength = gapGuideFade; }
+    ring.guideStrength = guideStrength;
     ring.age = 0;
+    ring.dead = false;
     if(ring.telegraph <= 0){
       ring.telegraph = 0;
+      ring.telegraphMax = 0;
       ring.moving = true;
     }
   }
@@ -335,23 +392,30 @@
       ring.telegraph -= dt;
       if(ring.telegraph <= 0){
         ring.telegraph = 0;
+        ring.telegraphMax = 0;
         ring.moving = true;
       }
       return;
     }
-    if(!ring.moving){ return; }
+    if(!ring.moving || ring.dead){ return; }
     ring.age += dt;
-    ring.radius -= ring.speed * dt;
-    if(ring.flickerTrigger && !ring.flickerDone && ring.radius < ring.flickerTrigger){
+    ring.radiusOuter -= ring.speedPxPerS * dt;
+    if(ring.radiusOuter < 0){ ring.radiusOuter = 0; }
+    ring.radiusInner = Math.max(0, ring.radiusOuter - ring.thickness);
+    if(ring.flickerTrigger && !ring.flickerDone && ring.radiusOuter < ring.flickerTrigger){
       if(ring.altGapIndex !== -1){
         ring.gapIndex = ring.altGapIndex;
+        if(ring.gapIndex < 0){
+          ring.gapIndex = (ring.gapIndex % ring.sides + ring.sides) % ring.sides;
+        }
       }
       ring.flickerDone = true;
     }
-    if(ring.collapseTrigger && ring.gapWidth > ring.collapseWidth && ring.radius < ring.collapseTrigger){
-      ring.gapWidth = ring.collapseWidth;
+    if(ring.collapseTrigger && ring.gapSpanRatio > ring.collapseWidth && ring.radiusOuter < ring.collapseTrigger){
+      ring.gapSpanRatio = ring.collapseWidth;
     }
-    if(ring.radius < player.radius - ring.thickness - 20){
+    if(ring.radiusInner <= TUNE.PLAYER_ORBIT_RADIUS_PX - 2 || ring.radiusOuter <= 0){
+      ring.dead = true;
       releaseRing(ring);
     }
   }
@@ -370,62 +434,103 @@
     }
   }
 
-  function checkRingCollision(ring){
-    if(!ring.moving){ return false; }
-    var radialGap = Math.abs(ring.radius - player.radius);
-    if(radialGap > (ring.thickness * 0.6 + player.hitTolerance)){ return false; }
-    var hit = false;
-    var pAngle = wrapAngle(player.angle + (TUNE.ENABLE_ARENA_SPIN ? worldSpinAngle : 0));
-    visitBlockedRanges(ring, function(start, end){
-      if(hit){ return; }
-      if(angleInRange(pAngle, start, end)){
-        hit = true;
+  function drawAnnularWedge(rInner, rOuter, start, end){
+    if(end <= start || rOuter <= 0){ return; }
+    var inner = rInner < 0 ? 0 : rInner;
+    if(inner > rOuter){ inner = rOuter; }
+    ctx.beginPath();
+    ctx.arc(0, 0, rOuter, start, end, false);
+    if(inner > 0){
+      ctx.arc(0, 0, inner, end, start, true);
+    } else {
+      ctx.lineTo(0, 0);
+    }
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function renderRingSegments(ring, rInner, rOuter){
+    if(ring.sides <= 0 || ring.segAngle <= 0){ return; }
+    var gapRatio = math.clamp(ring.gapSpanRatio, 0, 1);
+    var gapSpan = ring.segAngle * gapRatio;
+    var blockedSpan = ring.segAngle - gapSpan;
+    var epsilon = math.eps();
+    for(var i=0;i<ring.sides;i++){
+      var start = ring.baseAngle + i * ring.segAngle;
+      var end = start + ring.segAngle;
+      if(i === ring.gapIndex){
+        if(blockedSpan <= epsilon){ continue; }
+        var half = blockedSpan * 0.5;
+        drawAnnularWedge(rInner, rOuter, start, start + half);
+        drawAnnularWedge(rInner, rOuter, end - half, end);
+      } else {
+        drawAnnularWedge(rInner, rOuter, start, end);
       }
-    });
-    return hit;
+    }
+  }
+
+  function checkRingCollision(ring){
+    if(!ring.moving || ring.dead){ return false; }
+    if(ring.sides <= 0 || ring.segAngle <= 0){ return false; }
+    var epsilon = math.eps();
+    var playerRadius = player.radius;
+    if(playerRadius > ring.radiusOuter + epsilon){ return false; }
+    if(playerRadius < ring.radiusInner - epsilon){ return false; }
+    var aPlayerWorld = math.normAngle(player.angle);
+    var relative = math.normAngle(aPlayerWorld - worldSpinAngle - ring.baseAngle);
+    var idx = Math.floor(relative / ring.segAngle);
+    if(idx < 0){ idx += ring.sides; }
+    idx = idx % ring.sides;
+    if(idx === ring.gapIndex){
+      var segPos = relative - idx * ring.segAngle;
+      if(segPos < 0){ segPos += ring.segAngle; }
+      var gapSpan = ring.segAngle * ring.gapSpanRatio;
+      if(gapSpan >= ring.segAngle - epsilon){
+        return false;
+      }
+      var blockedMargin = (ring.segAngle - gapSpan) * 0.5;
+      if(segPos >= blockedMargin - epsilon && segPos <= ring.segAngle - blockedMargin + epsilon){
+        return false;
+      }
+    }
+    return true;
   }
 
   function renderTelegraph(ring){
     if(ring.telegraph <= 0){ return; }
-    var alpha = 1 - (ring.telegraph / (ring.telegraphMax || 1));
-    var color = ACCENT_COLORS[ring.colorIndex % ACCENT_COLORS.length];
+    var progress = ring.telegraphMax > 0 ? 1 - (ring.telegraph / ring.telegraphMax) : 1;
+    var alpha = math.clamp(progress, 0, 1);
+    var rOuter = ring.radiusOuter;
+    var rInner = Math.max(0, rOuter - ring.thickness);
     ctx.save();
-    ctx.strokeStyle = color;
-    ctx.globalAlpha = 0.2 + alpha * 0.35;
-    ctx.lineWidth = ring.thickness * 0.85;
-    visitBlockedRanges(ring, function(start, end){
-      ctx.beginPath();
-      ctx.arc(0, 0, ring.radius, start - worldSpinAngle, end - worldSpinAngle, false);
-      ctx.stroke();
-    });
+    ctx.globalAlpha = 0.15 + alpha * 0.35;
+    ctx.fillStyle = ring.color;
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+    renderRingSegments(ring, rInner, rOuter);
     ctx.restore();
   }
 
   function renderRing(ring){
-    if(!ring.moving){ return; }
-    var color = ACCENT_COLORS[ring.colorIndex % ACCENT_COLORS.length];
-    var nearPlayer = ring.radius < player.radius + 28;
+    if(!ring.moving || ring.dead){ return; }
+    var rOuter = ring.radiusOuter;
+    var rInner = Math.max(0, ring.radiusInner);
+    var nearPlayer = rOuter < player.radius + 28;
     ctx.save();
-    ctx.lineWidth = ring.thickness;
-    ctx.strokeStyle = nearPlayer ? 'rgba(255,176,22,0.85)' : color;
-    ctx.shadowColor = color;
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = ring.color;
+    ctx.shadowColor = ring.color;
     ctx.shadowBlur = nearPlayer ? 22 : 12;
-    ctx.globalAlpha = nearPlayer ? 0.95 : 0.85;
-    visitBlockedRanges(ring, function(start, end){
-      ctx.beginPath();
-      ctx.arc(0, 0, ring.radius, start - worldSpinAngle, end - worldSpinAngle, false);
-      ctx.stroke();
-    });
+    renderRingSegments(ring, rInner, rOuter);
     ctx.restore();
 
     if(ring.moving && ring.guideStrength > 0.01 && survivalTime < 45){
-      var step = TWO_PI / ring.laneCount;
-      var base = ring.angleOffset + ring.gapIndex * step + step * 0.5;
-      var arrowRadius = ring.radius + 36;
-      var alpha = ring.guideStrength * (1 - survivalTime / 45);
+      var gapCenter = ring.baseAngle + ring.gapIndex * ring.segAngle + ring.segAngle * 0.5;
+      var arrowRadius = rOuter + 36;
+      var arrowAlpha = ring.guideStrength * (1 - survivalTime / 45);
       ctx.save();
-      ctx.rotate(base);
-      ctx.globalAlpha = math.clamp(alpha, 0, 1);
+      ctx.rotate(gapCenter);
+      ctx.globalAlpha = math.clamp(arrowAlpha, 0, 1);
       ctx.fillStyle = 'rgba(61,224,180,0.7)';
       ctx.beginPath();
       ctx.moveTo(0, -arrowRadius);
@@ -503,16 +608,18 @@
   }
 
   function renderRings(){
-    for(var i=0;i<ringPool.length;i++){
-      var ring = ringPool[i];
+    var telegraphs = [];
+    var actives = [];
+    for(var i=0;i<rings.length;i++){
+      var ring = rings[i];
       if(!ring.active){ continue; }
-      if(ring.telegraph > 0){ renderTelegraph(ring); }
+      if(ring.telegraph > 0){ telegraphs.push(ring); }
+      if(ring.moving && !ring.dead){ actives.push(ring); }
     }
-    for(var j=0;j<ringPool.length;j++){
-      var activeRing = ringPool[j];
-      if(!activeRing.active){ continue; }
-      renderRing(activeRing);
-    }
+    telegraphs.sort(function(a, b){ return b.radiusOuter - a.radiusOuter; });
+    actives.sort(function(a, b){ return b.radiusOuter - a.radiusOuter; });
+    for(var t=0;t<telegraphs.length;t++){ renderTelegraph(telegraphs[t]); }
+    for(var r=0;r<actives.length;r++){ renderRing(actives[r]); }
   }
 
   function updatePlayer(dt){
@@ -529,7 +636,7 @@
     if(inputAxis === 0){
       player.velocity -= player.velocity * damping * dt;
     }
-    player.angle = wrapAngle(player.angle + player.velocity * dt);
+    player.angle = math.normAngle(player.angle + player.velocity * dt);
 
     if(Math.abs(player.velocity) > 1.8){
       tiltTimer = 0.18;
@@ -604,8 +711,8 @@
           spinVelocity = 0;
         }
       }
-      if(worldSpinAngle > TAU || worldSpinAngle < -TAU){
-        worldSpinAngle = wrapAngle(worldSpinAngle);
+      if(worldSpinAngle > TWO_PI || worldSpinAngle < -TWO_PI){
+        worldSpinAngle = math.normAngle(worldSpinAngle);
       }
     } else {
       worldSpinAngle = 0;
@@ -661,6 +768,7 @@
 
   function resetRunData(){
     clearRings();
+    colorIndex = 0;
     player.angle = -Math.PI / 2;
     player.velocity = 0;
     player.radius = TUNE.PLAYER_ORBIT_RADIUS_PX;
@@ -935,6 +1043,7 @@
     showBanner('READY');
     setState('READY');
     isStarting = false;
+    colorIndex = 0;
   }
 
   function startRun(){
@@ -1045,6 +1154,7 @@
     canvas.width = WIDTH * dpr;
     canvas.height = HEIGHT * dpr;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    refreshObstacleThickness();
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.imageSmoothingEnabled = false;
@@ -1093,6 +1203,7 @@
     try { Object.seal(canvas); } catch(_e){}
     try { Object.seal(ctx); } catch(_e){}
 
+    buildPalette();
     applyScaling();
     window.addEventListener('resize', applyScaling);
 
