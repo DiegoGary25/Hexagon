@@ -51,7 +51,11 @@
   /* ========= /TUNABLES ========= */
 
   var STEP_RATE = 1 / 120;
-  var TWO_PI = Math.PI * 2;
+  var TAU = Math.PI * 2;
+  var TWO_PI = TAU;
+
+  const PHASE_OFFSET_RAD = -Math.PI / 2;
+  const DEBUG_OVERLAY = false;
 
   var dpr = window.devicePixelRatio || 1;
   var viewRadius = 0;
@@ -173,7 +177,9 @@
       gapIndex: 0,
       gapSpanRatio: 1,
       segAngle: 0,
-      baseAngle: -Math.PI / 2,
+      phase: PHASE_OFFSET_RAD,
+      gapSpanRad: 0,
+      blockedSpanRad: 0,
       spawnSpin: 0,
       speedPxPerS: 0,
       color: '#ffffff',
@@ -218,7 +224,9 @@
     ring.gapIndex = 0;
     ring.gapSpanRatio = 1;
     ring.segAngle = 0;
-    ring.baseAngle = -Math.PI / 2;
+    ring.phase = PHASE_OFFSET_RAD;
+    ring.gapSpanRad = 0;
+    ring.blockedSpanRad = 0;
     ring.spawnSpin = 0;
     ring.speedPxPerS = 0;
     ring.color = '#ffffff';
@@ -246,7 +254,9 @@
       ringPool[i].gapIndex = 0;
       ringPool[i].gapSpanRatio = 1;
       ringPool[i].segAngle = 0;
-      ringPool[i].baseAngle = -Math.PI / 2;
+      ringPool[i].phase = PHASE_OFFSET_RAD;
+      ringPool[i].gapSpanRad = 0;
+      ringPool[i].blockedSpanRad = 0;
       ringPool[i].spawnSpin = 0;
       ringPool[i].speedPxPerS = 0;
       ringPool[i].color = '#ffffff';
@@ -372,14 +382,21 @@
     ring.thickness = obstacleThickness;
     ring.radiusInner = ring.radiusOuter - ring.thickness;
     ring.sides = sides;
-    ring.segAngle = TWO_PI / ring.sides;
-    var baseAngle = info.angleOffset === undefined ? -Math.PI / 2 : info.angleOffset;
-    ring.baseAngle = math.normAngle(baseAngle);
+    ring.segAngle = TAU / ring.sides;
+    var angleOffset = typeof info.angleOffset === 'number' ? info.angleOffset : 0;
+    ring.phase = math.normAngle(PHASE_OFFSET_RAD + angleOffset);
     ring.spawnSpin = worldSpinAngle;
     var gapIndex = info.gapIndex === undefined ? 0 : info.gapIndex;
     ring.gapIndex = ((gapIndex % ring.sides) + ring.sides) % ring.sides;
-    var gapRatio = info.gapWidth === undefined ? 1 : info.gapWidth;
+    var gapRatio = info.gapWidth;
+    if(gapRatio === undefined){
+      gapRatio = info.collapseWidth === undefined ? 1 : info.collapseWidth;
+    }
     ring.gapSpanRatio = math.clamp(gapRatio, 0, 1);
+    ring.gapSpanRad = ring.segAngle * ring.gapSpanRatio;
+    if(ring.gapSpanRad < 0){ ring.gapSpanRad = 0; }
+    ring.blockedSpanRad = ring.segAngle - ring.gapSpanRad;
+    if(ring.blockedSpanRad < 0){ ring.blockedSpanRad = 0; }
     var speed = typeof info.speed === 'number' ? info.speed : 120;
     ring.speedPxPerS = speed * dpr;
     if(!PALETTE || PALETTE.length === 0){
@@ -432,9 +449,6 @@
       }
       ring.flickerDone = true;
     }
-    if(ring.collapseTrigger && ring.gapSpanRatio > ring.collapseWidth && ring.radiusOuter < ring.collapseTrigger){
-      ring.gapSpanRatio = ring.collapseWidth;
-    }
     var recycleLimit = (TUNE.PLAYER_ORBIT_RADIUS_PX * dpr) - 2 * dpr;
     if(ring.radiusInner <= recycleLimit || ring.radiusOuter <= 0){
       ring.dead = true;
@@ -476,13 +490,12 @@
 
   function renderRingSegments(ring, rInner, rOuter){
     if(ring.sides <= 0 || ring.segAngle <= 0){ return; }
-    var gapRatio = math.clamp(ring.gapSpanRatio, 0, 1);
-    var gapSpan = ring.segAngle * gapRatio;
-    var blockedSpan = ring.segAngle - gapSpan;
+    var seg = ring.segAngle;
+    var blockedSpan = ring.blockedSpanRad;
     var epsilon = math.eps();
     for(var i=0;i<ring.sides;i++){
-      var start = ring.baseAngle + i * ring.segAngle;
-      var end = start + ring.segAngle;
+      var start = ring.phase + i * seg;
+      var end = start + seg;
       if(i === ring.gapIndex){
         if(blockedSpan <= epsilon){ continue; }
         var half = blockedSpan * 0.5;
@@ -504,7 +517,8 @@
     var playerRadius = TUNE.PLAYER_ORBIT_RADIUS_PX * dpr * zoom;
     var radialPad = radialEpsDevice * zoom;
 
-    if(playerRadius < (rInner - radialPad) || playerRadius > (rOuter + radialPad)){
+    var inBand = playerRadius >= (rInner - radialPad) && playerRadius <= (rOuter + radialPad);
+    if(!inBand){
       return false;
     }
 
@@ -512,16 +526,16 @@
     var halfChord = playerSize * 0.5;
     var playerHalfAng = Math.atan2(halfChord, Math.max(playerRadius, halfChord + 1));
 
-    var aWorld = math.normAngle(player.angle);
-    var aRel = math.normAngle(aWorld - worldSpinAngle - ring.baseAngle);
+    var playerAngle = math.normAngle(player.angle);
+    var aRel = math.normAngle(playerAngle - ring.phase);
     var seg = ring.segAngle;
-    var gapRatio = math.clamp(ring.gapSpanRatio, 0, 1);
-    var gapSpan = seg * gapRatio;
-    var blockedSpan = seg - gapSpan;
-    var gapStart = ring.gapIndex * seg + blockedSpan * 0.5;
-    var gapEnd = gapStart + gapSpan;
+    var idx = Math.floor(aRel / seg) % ring.sides;
+    if(idx < 0){ idx += ring.sides; }
+
+    var gapStart = ring.gapIndex * seg + ring.blockedSpanRad * 0.5;
+    var gapEnd = gapStart + ring.gapSpanRad;
     var angPad = playerHalfAng + TUNE.COLLISION_ANGULAR_EPS_RAD;
-    var inGap = math.angleInInterval(aRel, gapStart - angPad, gapEnd + angPad);
+    var inGap = (idx === ring.gapIndex) && math.angleInInterval(aRel, gapStart - angPad, gapEnd + angPad);
 
     return !inGap;
   }
@@ -633,6 +647,82 @@
     actives.sort(function(a, b){ return b.radiusOuter - a.radiusOuter; });
     for(var t=0;t<telegraphs.length;t++){ renderTelegraph(telegraphs[t]); }
     for(var r=0;r<actives.length;r++){ renderRing(actives[r]); }
+  }
+
+  function renderDebugOverlay(){
+    if(!DEBUG_OVERLAY){ return; }
+    var candidate = null;
+    var bestDistance = Infinity;
+    var playerRadiusDevice = TUNE.PLAYER_ORBIT_RADIUS_PX * dpr;
+    for(var i=0;i<rings.length;i++){
+      var ring = rings[i];
+      if(!ring.active || !ring.moving || ring.dead){ continue; }
+      var inner = Math.max(0, ring.radiusInner);
+      var outer = Math.max(inner, ring.radiusOuter);
+      if(playerRadiusDevice >= inner && playerRadiusDevice <= outer){
+        candidate = ring;
+        break;
+      }
+      var mid = (inner + outer) * 0.5;
+      var diff = Math.abs(mid - playerRadiusDevice);
+      if(diff < bestDistance){
+        bestDistance = diff;
+        candidate = ring;
+      }
+    }
+    if(!candidate){ return; }
+
+    var seg = candidate.segAngle;
+    if(seg <= 0 || candidate.sides <= 0){ return; }
+    var playerAngle = math.normAngle(player.angle);
+    var aRel = math.normAngle(playerAngle - candidate.phase);
+    var idx = Math.floor(aRel / seg) % candidate.sides;
+    if(idx < 0){ idx += candidate.sides; }
+    var gapStart = candidate.gapIndex * seg + candidate.blockedSpanRad * 0.5;
+    var gapEnd = gapStart + candidate.gapSpanRad;
+
+    var rInnerCss = Math.max(0, candidate.radiusInner) / dpr;
+    var rOuterCss = Math.max(rInnerCss, candidate.radiusOuter / dpr);
+
+    ctx.save();
+    ctx.rotate(candidate.phase);
+
+    var zoomLineWidth = 1.5 / Math.max(worldZoom, 0.0001);
+    ctx.lineWidth = zoomLineWidth;
+
+    ctx.strokeStyle = 'rgba(255,255,0,0.6)';
+    ctx.beginPath();
+    ctx.arc(0, 0, rOuterCss, candidate.gapIndex * seg, (candidate.gapIndex + 1) * seg);
+    ctx.arc(0, 0, rInnerCss, (candidate.gapIndex + 1) * seg, candidate.gapIndex * seg, true);
+    ctx.closePath();
+    ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(0,255,255,0.6)';
+    ctx.beginPath();
+    ctx.arc(0, 0, rOuterCss, gapStart, gapEnd);
+    ctx.arc(0, 0, rInnerCss, gapEnd, gapStart, true);
+    ctx.closePath();
+    ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+    var lineInnerX = Math.cos(aRel) * rInnerCss;
+    var lineInnerY = Math.sin(aRel) * rInnerCss;
+    var lineOuterX = Math.cos(aRel) * rOuterCss;
+    var lineOuterY = Math.sin(aRel) * rOuterCss;
+    ctx.beginPath();
+    ctx.moveTo(lineInnerX, lineInnerY);
+    ctx.lineTo(lineOuterX, lineOuterY);
+    ctx.stroke();
+
+    ctx.restore();
+
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.font = '12px monospace';
+    ctx.textBaseline = 'top';
+    ctx.fillText('idx: ' + idx + ' gap: ' + candidate.gapIndex, 10, 10);
+    ctx.restore();
   }
 
   function updatePlayer(dt){
@@ -774,6 +864,7 @@
     }
     renderArenaPolygon();
     renderRings();
+    renderDebugOverlay();
     renderPlayer();
     ctx.restore();
   }
@@ -835,7 +926,7 @@
           var info = {
             laneCount: lanes,
             gapIndex: baseGap,
-            angleOffset: -Math.PI / 2 + offset * step * 0.18,
+            angleOffset: offset * step * 0.18,
             speed: 110 + difficulty * 22,
             patternTag: 'spiral'
           };
@@ -858,7 +949,7 @@
             laneCount: lanes,
             gapIndex: toggle ? startGap : opposite,
             speed: 115 + difficulty * 24,
-            angleOffset: -Math.PI / 2,
+            angleOffset: 0,
             patternTag: 'alternating'
           };
         }
@@ -876,7 +967,7 @@
             laneCount: lanes,
             gapIndex: idx,
             speed: 120 + difficulty * 26,
-            angleOffset: -Math.PI / 2,
+            angleOffset: 0,
             patternTag: 'pingPong'
           };
           idx += direction;
@@ -897,8 +988,8 @@
             laneCount: lanes,
             gapIndex: collapseGap,
             speed: 125 + difficulty * 24,
-            angleOffset: -Math.PI / 2,
-            gapWidth: 1,
+            angleOffset: 0,
+            gapWidth: 0.35,
             collapseTrigger: TUNE.PLAYER_ORBIT_RADIUS_PX + 36,
             collapseWidth: 0.35,
             patternTag: 'collapse'
@@ -920,7 +1011,7 @@
             altGapIndex: alt,
             flickerTrigger: TUNE.PLAYER_ORBIT_RADIUS_PX + 70,
             speed: 120 + difficulty * 28,
-            angleOffset: -Math.PI / 2,
+            angleOffset: 0,
             patternTag: 'flicker'
           };
           flickerGap = (flickerGap + math.randi(1, 2)) % lanes;
@@ -939,7 +1030,7 @@
             laneCount: lanes,
             gapIndex: math.randi(0, lanes - 1),
             speed: 150 + difficulty * 35,
-            angleOffset: -Math.PI / 2,
+            angleOffset: 0,
             telegraph: 0.18,
             patternTag: 'inwardBurst'
           };
