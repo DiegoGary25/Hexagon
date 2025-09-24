@@ -67,6 +67,39 @@
     });
   }
 
+  function hit(){
+    schedule(function(ctx, gain){
+      var now = ctx.currentTime;
+      var osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(220, now);
+      osc.frequency.exponentialRampToValueAtTime(90, now + 0.22);
+      var toneGain = ctx.createGain();
+      toneGain.gain.setValueAtTime(0.65, now);
+      toneGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
+      osc.connect(toneGain);
+      toneGain.connect(gain);
+      osc.start(now);
+      osc.stop(now + 0.3);
+
+      var buffer = ctx.createBuffer(1, ctx.sampleRate * 0.12, ctx.sampleRate);
+      var data = buffer.getChannelData(0);
+      for(var i=0;i<data.length;i++){
+        var t = i / data.length;
+        data[i] = (Math.random() * 2 - 1) * (1 - t) * 0.8;
+      }
+      var src = ctx.createBufferSource();
+      src.buffer = buffer;
+      var burstGain = ctx.createGain();
+      burstGain.gain.setValueAtTime(0.5, now);
+      burstGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
+      src.connect(burstGain);
+      burstGain.connect(gain);
+      src.start(now);
+      src.stop(now + 0.2);
+    });
+  }
+
   function toggleMute(){
     muted = !muted;
     if(!context){
@@ -82,7 +115,7 @@
     ensure: function(){ ensureContext(); },
     playStart: function(){ pulse({ frequency: 420, duration: 0.3, level: 0.5, sweep: 2, type: 'triangle' }); },
     playTick: function(){ pulse({ frequency: 720, duration: 0.12, level: 0.28, sweep: 1.1, type: 'square' }); },
-    playMultUp: function(){ pulse({ frequency: 540, duration: 0.32, level: 0.45, sweep: 2.3, type: 'sawtooth' }); },
+    playHit: function(){ hit(); },
     playDeath: function(){ noiseBurst(); },
     toggleMute: function(){ return toggleMute(); },
     isMuted: function(){ return muted; }

@@ -20,15 +20,13 @@
     // Player orbit / feel
     PLAYER_ORBIT_RADIUS_PX: 90,
     PLAYER_SIZE_PX: 12,
-    PLAYER_TURN_SPEED_RAD_S: 5,
-    PLAYER_TURN_ACCEL_RAD_S2: 40.0,
+    PLAYER_TURN_SPEED_RAD_S: 5,     // base turn speed at timescale = 1
+    PLAYER_TURN_ACCEL_RAD_S2: 40.0, // IGNORE: movement is instant (no accel)
 
-    // Spawns / pacing
-    SPAWN_MIN_INTERVAL_S: 0.6,
-    SPAWN_MAX_INTERVAL_S: 0.6,
-    DIFFICULTY_SPAWN_ACCEL: 0.985,
+    // Beat-synced spawns
+    SPAWN_INTERVAL_S: 0.6,          // constant beat; no randomness
 
-    // Arena motion
+    // Arena motion (unchanged)
     ENABLE_ARENA_SPIN: true,
     SPIN_BASE_SPEED_RAD_S: 0.65,
     SPIN_SPEED_JITTER: 0.08,
@@ -46,7 +44,12 @@
 
     // Collision tolerances
     COLLISION_RADIAL_EPS_PX: 2.0,
-    COLLISION_ANGULAR_EPS_RAD: 0.015
+    COLLISION_ANGULAR_EPS_RAD: 0.015,
+
+    // NEW: global difficulty timescale (applies to BOTH player turn speed and ring radial speed)
+    GLOBAL_SPEED_MODE: 'expo',        // 'expo' recommended (smooth & multiplicative)
+    SPEEDUP_FACTOR_PER_MIN: 1.10,     // every 60s, speeds ×1.10 (obstacles AND player)
+    MAX_SPEEDUP_FACTOR: 2.5           // clamp overall scale so it doesn’t get absurd
   });
   /* ========= /TUNABLES ========= */
 
@@ -119,9 +122,6 @@
   var overlay = null;
   var message = null;
   var playAgain = null;
-  var multiplierFill = null;
-  var multiplierText = null;
-  var multiplierBar = null;
 
   var state = 'BOOT';
   var isStarting = false;
@@ -132,12 +132,8 @@
   var globalTime = 0;
 
   var survivalTime = 0;
-  var score = 0;
-  var multiplier = 1;
-  var multiplierProgress = 0;
-  var multiplierPulseTimer = 0;
-  var multiplierDropTimer = 0;
-  var nextCheckpoint = 20;
+  var currentTimescale = 1;
+  var nextBeatTime = Infinity;
 
   var logicalSides = 6;
   var displaySides = 6;
@@ -145,12 +141,10 @@
   var previousSides = 6;
   var morphTimer = 0;
   var morphDuration = 0;
-  var spawnPauseTimer = 0;
   var worldSpinAngle = 0;
   var worldZoom = 1;
   var spinVelocity = 0;
   var spinTimer = 0;
-  var nextSpinAt = 12;
   var checksumSalt = 0;
   var checksum = 0;
   var bannerTimer = 0;
@@ -185,7 +179,7 @@
       gapIndices: [],
       gapOpen: [],
       color: '#ffffff',
-      speedPxPerS: 0,
+      baseSpeedPxPerS: 0,
       patternTag: 'base',
       age: 0,
       dead: false
@@ -224,7 +218,7 @@
     ring.angleOffset = 0;
     ring.gapIndices.length = 0;
     ring.gapOpen.length = 0;
-    ring.speedPxPerS = 0;
+    ring.baseSpeedPxPerS = 0;
     ring.color = '#ffffff';
     ring.patternTag = 'base';
     ring.age = 0;
@@ -248,7 +242,7 @@
       ring.angleOffset = 0;
       ring.gapIndices.length = 0;
       ring.gapOpen.length = 0;
-      ring.speedPxPerS = 0;
+    ring.baseSpeedPxPerS = 0;
       ring.color = '#ffffff';
       ring.patternTag = 'base';
       ring.age = 0;
@@ -258,63 +252,7 @@
 
   function updateScoreLabel(){
     if(scoreEl){
-      scoreEl.textContent = score.toFixed(2);
-    }
-  }
-
-  function updateMultiplierUI(){
-    if(!multiplierFill || !multiplierText){ return; }
-    var height = math.clamp(multiplierProgress, 0, 1) * 100;
-    multiplierFill.style.height = height.toFixed(2) + '%';
-    multiplierText.textContent = multiplier.toFixed(1).replace('.0', '') + '×';
-    if(height > 70){
-      multiplierBar.classList.add('glow');
-    } else {
-      multiplierBar.classList.remove('glow');
-    }
-  }
-
-  function resetMultiplier(impact){
-    multiplier = 1;
-    multiplierProgress = 0;
-    multiplierPulseTimer = 0;
-    multiplierDropTimer = impact ? 0.25 : 0;
-    updateMultiplierUI();
-    multiplierBar.classList.remove('glow');
-    if(impact){
-      multiplierText.classList.remove('pulse');
-      multiplierText.classList.add('shrink');
-    } else {
-      multiplierText.classList.remove('pulse');
-      multiplierText.classList.remove('shrink');
-    }
-  }
-
-  function addMultiplierProgress(amount){
-    multiplierProgress += amount;
-    if(multiplierProgress >= 1){
-      multiplierProgress -= 1;
-      multiplier = Math.round((multiplier + 0.5) * 10) / 10;
-      multiplierText.classList.remove('shrink');
-      multiplierText.classList.add('pulse');
-      multiplierPulseTimer = 0.25;
-      audio.playMultUp();
-    }
-    updateMultiplierUI();
-  }
-
-  function updateMultiplierTimers(dt){
-    if(multiplierPulseTimer > 0){
-      multiplierPulseTimer -= dt;
-      if(multiplierPulseTimer <= 0){
-        multiplierText.classList.remove('pulse');
-      }
-    }
-    if(multiplierDropTimer > 0){
-      multiplierDropTimer -= dt;
-      if(multiplierDropTimer <= 0){
-        multiplierText.classList.remove('shrink');
-      }
+      scoreEl.textContent = survivalTime.toFixed(2);
     }
   }
 
@@ -367,7 +305,7 @@
     ring.angleOffset = angleOffset;
     ring.phase = PHASE_OFFSET_RAD + angleOffset;
     var speed = typeof info.speed === 'number' ? info.speed : 120;
-    ring.speedPxPerS = speed * dpr;
+    ring.baseSpeedPxPerS = speed * dpr;
     if(!PALETTE || PALETTE.length === 0){
       ring.color = '#3DE0B4';
     } else {
@@ -422,7 +360,8 @@
     }
     if(!ring.moving || ring.dead){ return; }
     ring.age += dt;
-    ring.radiusOuter -= ring.speedPxPerS * dt;
+    var radialSpeed = ring.baseSpeedPxPerS * currentTimescale;
+    ring.radiusOuter -= radialSpeed * dt;
     if(ring.radiusOuter < 0){ ring.radiusOuter = 0; }
     ring.radiusInner = ring.radiusOuter - ring.thickness;
     if(ring.radiusInner < 0){ ring.radiusInner = 0; }
@@ -696,11 +635,23 @@
     ctx.restore();
   }
 
+  function computeTimescale(elapsed){
+    if(TUNE.GLOBAL_SPEED_MODE === 'expo'){
+      var minutes = Math.max(0, elapsed) / 60;
+      var raw = Math.pow(TUNE.SPEEDUP_FACTOR_PER_MIN, minutes);
+      if(!Number.isFinite(raw) || raw <= 0){ raw = 1; }
+      var clamped = Math.min(raw, TUNE.MAX_SPEEDUP_FACTOR);
+      return clamped > 0 ? clamped : 1;
+    }
+    return 1;
+  }
+
   function updatePlayer(dt){
     var left = input.left();
     var right = input.right();
     var inputAxis = (right ? 1 : 0) - (left ? 1 : 0);
-    player.velocity = inputAxis * TUNE.PLAYER_TURN_SPEED_RAD_S;
+    var effectiveTurnSpeed = TUNE.PLAYER_TURN_SPEED_RAD_S * currentTimescale;
+    player.velocity = inputAxis * effectiveTurnSpeed;
     player.angle = math.normAngle(player.angle + player.velocity * dt);
 
     if(inputAxis < 0){
@@ -720,34 +671,6 @@
         }
       }
     }
-  }
-
-  function handleCheckpoint(){
-    if(survivalTime >= nextCheckpoint){
-      nextCheckpoint += 20;
-      showBanner('CHECKPOINT');
-    }
-  }
-
-  function scheduleMorph(){
-    var nextSides = math.randi(5, 8);
-    if(nextSides === logicalSides){
-      nextSides = nextSides === 8 ? 5 : nextSides + 1;
-    }
-    previousSides = displaySides;
-    targetSides = nextSides;
-    morphTimer = 0;
-    morphDuration = 0.6;
-    spawnPauseTimer = 0.45;
-    patternManager.defer(spawnPauseTimer);
-    showBanner('MORPH');
-  }
-
-  function scheduleSpin(){
-    if(!TUNE.ENABLE_ARENA_SPIN){ return; }
-    spinTimer = 2 + math.randf(0, 0.8);
-    spinVelocity = (math.randf() > 0.5 ? 1 : -1) * (0.9 + Math.min(1.8, survivalTime / 30));
-    showBanner('SPIN');
   }
 
   function updateMorph(dt){
@@ -797,18 +720,8 @@
     }
   }
 
-  function updateDifficulty(dt){
-    if(TUNE.ENABLE_ARENA_SPIN && survivalTime > nextSpinAt){
-      scheduleSpin();
-      nextSpinAt += 12 + math.randf(0, 10);
-    }
-    if(survivalTime > 18 && morphTimer === 0 && morphDuration === 0 && math.randf() < 0.002){
-      scheduleMorph();
-    }
-  }
-
   function updateChecksum(){
-    if(!Number.isFinite(score) || !Number.isFinite(multiplier)){
+    if(!Number.isFinite(survivalTime)){
       prepareReadyState();
       return;
     }
@@ -816,7 +729,7 @@
     for(var i=0;i<ringPool.length;i++){
       if(ringPool[i].active){ activeCount++; }
     }
-    checksum = ((activeCount << 3) ^ ((score * 17) | 0) ^ ((multiplier * 31) | 0) ^ checksumSalt) >>> 0;
+    checksum = ((activeCount << 3) ^ ((survivalTime * 17) | 0) ^ checksumSalt) >>> 0;
   }
 
   function render(){
@@ -845,34 +758,24 @@
     player.velocity = 0;
     player.radius = TUNE.PLAYER_ORBIT_RADIUS_PX;
     survivalTime = 0;
-    score = 0;
-    multiplier = 1;
-    multiplierProgress = 0;
-    multiplierPulseTimer = 0;
-    multiplierDropTimer = 0;
-    nextCheckpoint = 20;
+    currentTimescale = 1;
+    nextBeatTime = Infinity;
     logicalSides = 6;
     displaySides = 6;
     previousSides = 6;
     targetSides = 6;
     morphTimer = 0;
     morphDuration = 0;
-    spawnPauseTimer = 0;
     worldSpinAngle = 0;
     worldZoom = 1;
     spinVelocity = 0;
     spinTimer = 0;
-    nextSpinAt = 12;
     checksumSalt = (math.randf() * 0xFFFFFFFF) >>> 0;
     checksum = 0;
     bannerTimer = 0;
     bannerActive = false;
     tiltTimer = 0;
     updateScoreLabel();
-    updateMultiplierUI();
-    multiplierText.classList.remove('pulse');
-    multiplierText.classList.remove('shrink');
-    multiplierBar.classList.remove('glow');
     container.classList.remove('tilt-left');
     container.classList.remove('tilt-right');
   }
@@ -1054,106 +957,118 @@
 
   var patternManager = (function(){
     var activePattern = null;
-    var nextSpawnAt = Infinity;
 
-    function schedule(time, extraIntervals){
-      var count = 1 + (extraIntervals || 0);
-      if(count < 0){ count = 0; }
-      nextSpawnAt = time + Math.max(0.08, TUNE.SPAWN_MIN_INTERVAL_S * count);
+    function cloneSpawn(spawn){
+      var info = {};
+      for(var key in spawn){
+        if(Object.prototype.hasOwnProperty.call(spawn, key)){
+          info[key] = spawn[key];
+        }
+      }
+      return info;
     }
 
-    function difficultyScale(base){
-      var scale = 1 + Math.min(1.3, survivalTime / 75);
-      return base * scale;
-    }
-
-    function beginPattern(){
+    function pickPattern(){
+      var lanes = Math.max(3, Math.round(logicalSides));
       var candidates = PATTERN_SEQUENCE.slice();
-      if(lastPatternName){
+      if(lastPatternName && candidates.length > 1){
         var lastIdx = candidates.indexOf(lastPatternName);
         if(lastIdx !== -1){ candidates.splice(lastIdx, 1); }
       }
-      if(candidates.length === 0){ candidates = PATTERN_SEQUENCE.slice(); }
       while(candidates.length > 0){
         var pickIdx = math.randi(0, candidates.length - 1);
-        var pick = candidates.splice(pickIdx, 1)[0];
-        var builder = PATTERN_BUILDERS[pick];
+        var key = candidates.splice(pickIdx, 1)[0];
+        var builder = PATTERN_BUILDERS[key];
         if(typeof builder !== 'function'){ continue; }
-        var pattern = builder(Math.max(3, Math.round(logicalSides)));
+        var pattern = builder(lanes);
         if(!pattern || typeof pattern.next !== 'function'){ continue; }
-        pattern.name = pick;
-        pattern.label = pattern.label || pick.toUpperCase();
-        pattern.tag = pattern.tag || pick;
-        pattern.baseSpeed = typeof pattern.baseSpeed === 'number' ? pattern.baseSpeed : 150;
-        pattern.telegraph = typeof pattern.telegraph === 'number' ? Math.max(0, pattern.telegraph) : 0.3;
-        activePattern = pattern;
-        lastPatternName = pick;
-        if(pattern.label){ showBanner(pattern.label); }
-        return;
+        if(typeof pattern.lanes !== 'number'){ pattern.lanes = lanes; }
+        if(typeof pattern.baseSpeed !== 'number'){ pattern.baseSpeed = 150; }
+        if(typeof pattern.telegraph !== 'number'){ pattern.telegraph = 0.3; }
+        pattern.key = key;
+        return pattern;
       }
-      activePattern = null;
+      return null;
     }
 
-    function reset(time){
-      activePattern = null;
-      lastPatternName = '';
-      schedule(time, 0);
-    }
-
-    function spawnNext(time){
+    function ensurePattern(){
       if(!activePattern){
-        beginPattern();
-        if(!activePattern){
-          schedule(time, 0);
-          return;
-        }
+        activePattern = pickPattern();
       }
+    }
 
-      var spawn = activePattern.next();
-      if(!spawn){
-        activePattern = null;
-        schedule(time, 1);
-        return;
+    function finalizeSpawn(spawn){
+      var info = cloneSpawn(spawn);
+      var lanes = info.laneCount === undefined ? (activePattern && activePattern.lanes) : info.laneCount;
+      if(lanes === undefined){ lanes = Math.max(3, Math.round(logicalSides)); }
+      info.laneCount = lanes;
+      var baseSpeed = typeof info.speed === 'number' ? info.speed : (activePattern ? activePattern.baseSpeed : 150);
+      info.speed = baseSpeed;
+      if(typeof info.telegraph !== 'number'){
+        info.telegraph = activePattern ? activePattern.telegraph : 0.3;
       }
-
-      var lanes = activePattern.lanes === undefined ? logicalSides : activePattern.lanes;
-      var info = {};
-      for(var key in spawn){ if(Object.prototype.hasOwnProperty.call(spawn, key)){ info[key] = spawn[key]; } }
-      info.laneCount = info.laneCount === undefined ? lanes : info.laneCount;
-      var baseSpeed = typeof info.speed === 'number' ? info.speed : activePattern.baseSpeed;
-      info.speed = difficultyScale(baseSpeed);
-      if(typeof info.telegraph !== 'number'){ info.telegraph = activePattern.telegraph; }
-      info.patternTag = info.patternTag || activePattern.tag || 'base';
+      info.patternTag = info.patternTag || (activePattern ? activePattern.tag : 'base');
       if(Array.isArray(info.gapIndices)){
         info.gapIndices = info.gapIndices.slice();
       }
+      return info;
+    }
 
-      spawnRing(info);
-      audio.playTick();
-      schedule(time, 0);
+    function pullNextSpawn(){
+      var guard = 0;
+      while(guard++ < 32){
+        ensurePattern();
+        if(!activePattern){ return null; }
+        var spawn = activePattern.next();
+        if(spawn){
+          return finalizeSpawn(spawn);
+        }
+        lastPatternName = activePattern.key || '';
+        activePattern = null;
+      }
+      return null;
     }
 
     return {
-      start: function(time){ reset(time); },
-      reset: function(time){ reset(time); },
-      update: function(time){
-        if(state !== 'RUN'){ return; }
-        while(time >= nextSpawnAt){
-          spawnNext(time);
-          if(nextSpawnAt <= time){
-            nextSpawnAt = time + 0.08;
-            break;
-          }
-        }
+      reset: function(){
+        activePattern = null;
+        lastPatternName = '';
       },
-      defer: function(amount){
-        nextSpawnAt += amount;
-        if(nextSpawnAt < survivalTime + 0.08){
-          nextSpawnAt = survivalTime + 0.08;
-        }
+      start: function(){
+        activePattern = null;
+      },
+      nextSpawn: function(){
+        return pullNextSpawn();
       }
     };
   })();
+
+  function resetBeatClock(startTime){
+    var base = Number.isFinite(startTime) ? startTime : 0;
+    var interval = Math.max(0.01, TUNE.SPAWN_INTERVAL_S);
+    nextBeatTime = base + interval;
+  }
+
+  function spawnOnBeat(){
+    var spec = patternManager.nextSpawn();
+    if(!spec){ return false; }
+    spawnRing(spec);
+    audio.playTick();
+    return true;
+  }
+
+  function runBeatClock(runTime){
+    var interval = Math.max(0.01, TUNE.SPAWN_INTERVAL_S);
+    if(!Number.isFinite(nextBeatTime)){ nextBeatTime = runTime + interval; }
+    var guard = 0;
+    while(runTime + 1e-6 >= nextBeatTime && guard++ < 32){
+      if(!spawnOnBeat()){
+        nextBeatTime = runTime + interval;
+        break;
+      }
+      nextBeatTime += interval;
+    }
+  }
 
   function setState(next){
     state = next;
@@ -1161,8 +1076,7 @@
 
   function prepareReadyState(){
     resetRunData();
-    resetMultiplier(false);
-    patternManager.reset(0);
+    patternManager.reset();
     hideOverlay();
     showBanner('READY');
     setState('READY');
@@ -1176,18 +1090,15 @@
     isStarting = true;
     audio.ensure();
     hideOverlay();
-    multiplierText.classList.remove('pulse');
-    multiplierText.classList.remove('shrink');
-    multiplierBar.classList.remove('glow');
-    spawnPauseTimer = 0;
-    patternManager.start(survivalTime);
+    patternManager.start();
+    resetBeatClock(survivalTime);
     setState('RUN');
     isStarting = false;
   }
 
   function gameOver(){
     if(state !== 'RUN'){ return; }
-    resetMultiplier(true);
+    audio.playHit();
     audio.playDeath();
     container.classList.add('shake');
     window.setTimeout(function(){ container.classList.remove('shake'); }, 120);
@@ -1195,6 +1106,7 @@
     if(playAgain){
       try { playAgain.focus({ preventScroll: true }); } catch(_e){}
     }
+    nextBeatTime = Infinity;
     setState('GAME_OVER');
   }
 
@@ -1222,18 +1134,9 @@
 
   function updateRun(dt){
     survivalTime += dt;
-    score += dt * multiplier;
+    currentTimescale = computeTimescale(survivalTime);
     updateScoreLabel();
-    addMultiplierProgress(dt * 0.06 + survivalTime * 0.0004);
-    handleCheckpoint();
-    updateDifficulty(dt);
-    if(spawnPauseTimer > 0){
-      spawnPauseTimer -= dt;
-      if(spawnPauseTimer < 0){ spawnPauseTimer = 0; }
-    }
-    if(spawnPauseTimer <= 0){
-      patternManager.update(survivalTime);
-    }
+    runBeatClock(survivalTime);
     updateRings(dt);
     updateMorph(dt);
     updateSpin(dt);
@@ -1261,7 +1164,6 @@
   function fixedUpdate(dt){
     globalTime += dt;
     updateBanner(dt);
-    updateMultiplierTimers(dt);
     handleMuteInput();
     pollStartIntent();
     var movementIntent = input.left() || input.right();
@@ -1299,7 +1201,7 @@
         ring.radiusOuter *= scale;
         ring.thickness *= scale;
         ring.radiusInner = ring.radiusOuter - ring.thickness;
-        ring.speedPxPerS *= scale;
+        ring.baseSpeedPxPerS *= scale;
       }
     }
 
@@ -1345,9 +1247,6 @@
     overlay = doc.getElementById('overlay');
     message = doc.getElementById('message');
     playAgain = doc.getElementById('playAgain');
-    multiplierFill = doc.getElementById('multiplierFill');
-    multiplierText = doc.getElementById('multiplierText');
-    multiplierBar = doc.getElementById('multiplierBar');
 
     try { Object.seal(canvas); } catch(_e){}
     try { Object.seal(ctx); } catch(_e){}
