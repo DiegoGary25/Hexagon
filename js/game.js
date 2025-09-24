@@ -495,10 +495,8 @@
     var halfChord = playerSize * 0.5;
     var playerHalfAng = Math.atan2(halfChord, Math.max(playerRadius, halfChord + 1));
 
-    var frameRotation = getFrameRotation();
     var aWorld = math.normAngle(player.angle);
-    var aFrame = math.normAngle(aWorld - frameRotation);
-    var localAngle = math.normAngle(aFrame - ring.phase);
+    var localAngle = math.normAngle(aWorld - ring.phase);
     var seg = ring.segAngle;
     var angPad = playerHalfAng + TUNE.COLLISION_ANGULAR_EPS_RAD;
     var gaps = ring.gapIndices;
@@ -653,10 +651,8 @@
 
     var seg = candidate.segAngle;
     if(seg <= 0 || candidate.sides <= 0){ return; }
-    var frameRotation = getFrameRotation();
     var aWorld = math.normAngle(player.angle);
-    var aFrame = math.normAngle(aWorld - frameRotation);
-    var aRel = math.normAngle(aFrame - candidate.phase);
+    var aRel = math.normAngle(aWorld - candidate.phase);
     var idx = Math.floor(aRel / seg) % candidate.sides;
     if(idx < 0){ idx += candidate.sides; }
     var primaryGap = candidate.gapIndices.length > 0 ? candidate.gapIndices[0] : 0;
