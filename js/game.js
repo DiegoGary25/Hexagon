@@ -122,6 +122,7 @@
   var overlay = null;
   var message = null;
   var playAgain = null;
+  var fontsPrimed = false;
 
   var state = 'BOOT';
   var isStarting = false;
@@ -285,6 +286,37 @@
     if(overlay){
       overlay.classList.add('hidden');
     }
+  }
+
+  function primeFonts(){
+    if(fontsPrimed || !doc.body){ return; }
+    fontsPrimed = true;
+    var probe = doc.createElement('div');
+    probe.style.position = 'absolute';
+    probe.style.width = '0';
+    probe.style.height = '0';
+    probe.style.overflow = 'hidden';
+    probe.style.opacity = '0';
+    probe.style.pointerEvents = 'none';
+    probe.style.userSelect = 'none';
+
+    var pressuraProbe = doc.createElement('span');
+    pressuraProbe.textContent = 'HEXARC';
+    pressuraProbe.style.fontFamily = "'Pressura', sans-serif";
+    var skrappaProbe = doc.createElement('span');
+    skrappaProbe.textContent = 'HEXARC';
+    skrappaProbe.style.fontFamily = "'Skrappa', 'Pressura', sans-serif";
+
+    probe.appendChild(pressuraProbe);
+    probe.appendChild(skrappaProbe);
+    doc.body.appendChild(probe);
+
+    void pressuraProbe.offsetWidth;
+    void skrappaProbe.offsetWidth;
+
+    window.setTimeout(function(){
+      if(probe.parentNode){ probe.parentNode.removeChild(probe); }
+    }, 0);
   }
 
   function spawnRing(info){
@@ -780,176 +812,206 @@
     container.classList.remove('tilt-right');
   }
 
-  var PATTERN_BUILDERS = {
-    spiralCW: function(lanes){
-      var gap = math.randi(0, lanes - 1);
-      var remaining = lanes + 6 + math.randi(0, 3);
-      return {
-        lanes: lanes,
-        label: 'SPIRAL',
-        tag: 'spiral-cw',
-        baseSpeed: 150,
-        telegraph: 0.32,
-        next: function(){
-          if(remaining-- <= 0){ return null; }
-          var info = { gapIndex: gap };
-          gap = (gap + 1) % lanes;
-          return info;
-        }
-      };
-    },
-    spiralCCW: function(lanes){
-      var gap = math.randi(0, lanes - 1);
-      var remaining = lanes + 6 + math.randi(0, 3);
-      return {
-        lanes: lanes,
-        label: 'SPIRAL',
-        tag: 'spiral-ccw',
-        baseSpeed: 150,
-        telegraph: 0.32,
-        next: function(){
-          if(remaining-- <= 0){ return null; }
-          var info = { gapIndex: gap };
-          gap = (gap - 1 + lanes) % lanes;
-          return info;
-        }
-      };
-    },
-    alternating: function(lanes){
-      var step = math.randi(1, Math.max(1, Math.floor(lanes / 2)));
-      var current = math.randi(0, lanes - 1);
-      var direction = 1;
-      var remaining = 8 + math.randi(0, 4);
-      return {
-        lanes: lanes,
-        label: 'ALTERNATING',
-        tag: 'alternating',
-        baseSpeed: 160,
-        telegraph: 0.34,
-        next: function(){
-          if(remaining-- <= 0){ return null; }
-          var info = { gapIndex: current };
-          current = (current + direction * step + lanes) % lanes;
-          direction *= -1;
-          return info;
-        }
-      };
-    },
-    pingPong: function(lanes){
-      var length = Math.max(2, Math.min(lanes, math.randi(2, Math.floor(lanes / 2) + 1)));
-      var start = math.randi(0, lanes - 1);
-      var positions = [];
-      for(var i=0;i<length;i++){ positions.push((start + i) % lanes); }
-      var index = 0;
-      var dir = 1;
-      var remaining = length * 2 + 4 + math.randi(0, 3);
-      return {
-        lanes: lanes,
-        label: 'PING PONG',
-        tag: 'ping-pong',
-        baseSpeed: 155,
-        telegraph: 0.32,
-        next: function(){
-          if(remaining-- <= 0){ return null; }
-          var info = { gapIndex: positions[index] };
-          index += dir;
-          if(index >= positions.length){ index = positions.length - 2; dir = -1; }
-          else if(index < 0){ index = 1; dir = 1; }
-          return info;
-        }
-      };
-    },
-    collapse: function(lanes){
-      var gap = math.randi(0, lanes - 1);
-      var remaining = 5 + math.randi(0, 3);
-      var first = true;
-      return {
-        lanes: lanes,
-        label: 'BARRAGE',
-        tag: 'barrage',
-        baseSpeed: 190,
-        telegraph: 0.38,
-        next: function(){
-          if(remaining-- <= 0){ return null; }
-          var info = { gapIndex: gap };
-          if(first){
-            info.telegraph = 0.45;
-            first = false;
-          } else {
-            info.telegraph = 0.22;
-          }
-          return info;
-        }
-      };
-    },
-    flicker: function(lanes){
-      var gap = math.randi(0, lanes - 1);
-      var pendingShift = 0;
-      var remaining = 6 + math.randi(0, 4);
-      return {
-        lanes: lanes,
-        label: 'FLICKER',
-        tag: 'flicker',
-        baseSpeed: 165,
-        telegraph: 0.3,
-        next: function(){
-          if(remaining-- <= 0){ return null; }
-          if(pendingShift !== 0){
-            gap = (gap + pendingShift + lanes) % lanes;
-            pendingShift = 0;
-          }
-          var info = { gapIndex: gap };
-          if(math.randf() < 0.28){
-            pendingShift = math.randf() > 0.5 ? 1 : -1;
-          }
-          return info;
-        }
-      };
-    },
-    stream: function(lanes){
-      var gap = math.randi(0, lanes - 1);
-      var step = math.randi(1, Math.max(1, Math.floor(lanes / 3)));
-      var remaining = lanes + 6 + math.randi(0, 4);
-      return {
-        lanes: lanes,
-        label: 'STREAM/FAN',
-        tag: 'stream',
-        baseSpeed: 210,
-        telegraph: 0.18,
-        next: function(){
-          if(remaining-- <= 0){ return null; }
-          var info = { gapIndex: gap, telegraph: 0.18 };
-          gap = (gap + step) % lanes;
-          return info;
-        }
-      };
-    },
-    doubleWall: function(lanes){
-      var gap = math.randi(0, lanes - 1);
-      var even = (lanes % 2) === 0;
-      var half = even ? lanes / 2 : Math.floor(lanes / 2);
-      var remaining = 4 + math.randi(0, 3);
-      return {
-        lanes: lanes,
-        label: 'DOUBLE WALL',
-        tag: 'double-wall',
-        baseSpeed: 170,
-        telegraph: 0.36,
-        next: function(){
-          if(remaining-- <= 0){ return null; }
-          var gaps = [gap];
-          if(even){
-            var opposite = (gap + half) % lanes;
-            if(opposite !== gap){ gaps.push(opposite); }
-          }
-          var info = { gapIndex: gap, gapIndices: gaps };
-          var shift = even ? math.randi(1, Math.max(1, Math.floor(half - 1))) : math.randi(1, Math.max(1, half));
-          if(!Number.isFinite(shift) || shift <= 0){ shift = 1; }
-          gap = (gap + shift) % lanes;
-          return info;
-        }
-      };
+  function wrapLaneIndex(idx, lanes){
+    var normalized = Math.round(idx) % lanes;
+    if(normalized < 0){ normalized += lanes; }
+    return normalized;
+  }
+
+  function choosePatternLength(range){
+    if(Array.isArray(range)){
+      var min = Math.max(1, Math.round(range[0]));
+      var max = Math.max(min, Math.round(range[1]));
+      if(min === max){ return min; }
+      return math.randi(min, max);
     }
+    if(typeof range === 'number'){ return Math.max(1, Math.round(range)); }
+    return 1;
+  }
+
+  function createDeltaPattern(config){
+    return function(lanes){
+      lanes = Math.max(3, Math.round(lanes));
+      if(config.requireEven && (lanes % 2 !== 0)){ return null; }
+
+      var count = choosePatternLength(config.lengthRange || config.count || 1);
+      if(!Number.isFinite(count) || count < 1){ count = 1; }
+
+      var baseGap = math.randi(0, lanes - 1);
+      var initialShift = 0;
+      if(typeof config.initialShift === 'function'){
+        initialShift = Number(config.initialShift(count, lanes)) || 0;
+      } else if(typeof config.initialShift === 'number'){
+        initialShift = config.initialShift;
+      }
+
+      var deltas = [];
+      if(typeof config.buildDeltas === 'function'){
+        var built = config.buildDeltas(count, lanes);
+        if(Array.isArray(built)){ deltas = built.slice(); }
+      } else if(Array.isArray(config.deltas)){
+        deltas = config.deltas.slice();
+      }
+      var needed = Math.max(0, count - 1);
+      for(var i=deltas.length; i<needed; i++){ deltas.push(0); }
+      if(deltas.length > needed){ deltas.length = needed; }
+
+      var current = wrapLaneIndex(baseGap + initialShift, lanes);
+      var index = 0;
+
+      return {
+        lanes: lanes,
+        label: config.label || config.key || 'PATTERN',
+        tag: config.tag || config.key || 'pattern',
+        baseSpeed: config.baseSpeed || 160,
+        telegraph: (config.telegraph !== undefined) ? config.telegraph : 0.3,
+        next: function(){
+          if(index >= count){ return null; }
+          var info = { gapIndex: current };
+          if(typeof config.modifySpawn === 'function'){
+            var extras = config.modifySpawn(info, index, lanes, count);
+            if(extras && typeof extras === 'object'){
+              for(var key in extras){
+                if(Object.prototype.hasOwnProperty.call(extras, key)){
+                  info[key] = extras[key];
+                }
+              }
+            }
+          }
+          index++;
+          if(index < count){
+            var delta = deltas[index - 1];
+            if(!Number.isFinite(delta)){ delta = 0; }
+            current = wrapLaneIndex(current + delta, lanes);
+          }
+          return info;
+        }
+      };
+    };
+  }
+
+  var PATTERN_BUILDERS = {
+    triStep: createDeltaPattern({
+      key: 'triStep',
+      label: 'TRI-STEP',
+      tag: 'tri-step',
+      lengthRange: [2, 3],
+      baseSpeed: 190,
+      telegraph: 0.26,
+      buildDeltas: function(count){
+        var deltas = [];
+        for(var i=1;i<count;i++){ deltas.push(2); }
+        return deltas;
+      }
+    }),
+    stutterSpiral: createDeltaPattern({
+      key: 'stutterSpiral',
+      label: 'STUTTER',
+      tag: 'stutter-spiral',
+      lengthRange: [2, 3],
+      baseSpeed: 185,
+      telegraph: 0.3,
+      buildDeltas: function(count){
+        var deltas = [];
+        if(count > 1){ deltas.push(1); }
+        if(count > 2){ deltas.push(0); }
+        return deltas;
+      }
+    }),
+    snapback: createDeltaPattern({
+      key: 'snapback',
+      label: 'SNAPBACK',
+      tag: 'snapback',
+      lengthRange: [3, 3],
+      baseSpeed: 195,
+      telegraph: 0.28,
+      initialShift: 2,
+      buildDeltas: function(){
+        return [-1, 2];
+      }
+    }),
+    zigZagVolley: createDeltaPattern({
+      key: 'zigZagVolley',
+      label: 'ZIG-ZAG VOLLEY',
+      tag: 'zigzag-volley',
+      lengthRange: [5, 5],
+      baseSpeed: 175,
+      telegraph: 0.24,
+      buildDeltas: function(count){
+        var sequence = [2, -2, 2, -2, 2];
+        var deltas = [];
+        for(var i=1;i<count;i++){
+          deltas.push(sequence[i - 1]);
+        }
+        return deltas;
+      }
+    }),
+    crossfade: createDeltaPattern({
+      key: 'crossfade',
+      label: 'CROSSFADE',
+      tag: 'crossfade',
+      lengthRange: [4, 4],
+      baseSpeed: 165,
+      telegraph: 0.28,
+      buildDeltas: function(count){
+        var sequence = [1, 1, 2, 2];
+        var deltas = [];
+        for(var i=1;i<count;i++){
+          deltas.push(sequence[i - 1]);
+        }
+        return deltas;
+      }
+    }),
+    mirrorPair: createDeltaPattern({
+      key: 'mirrorPair',
+      label: 'MIRROR PAIR',
+      tag: 'mirror-pair',
+      lengthRange: [4, 4],
+      baseSpeed: 180,
+      telegraph: 0.32,
+      requireEven: true,
+      buildDeltas: function(count, lanes){
+        var half = Math.max(1, Math.round(lanes / 2));
+        var deltas = [];
+        if(count > 1){ deltas.push(0); }
+        if(count > 2){ deltas.push(half); }
+        if(count > 3){ deltas.push(0); }
+        return deltas;
+      }
+    }),
+    sawtooth: createDeltaPattern({
+      key: 'sawtooth',
+      label: 'SAWTOOTH',
+      tag: 'sawtooth',
+      lengthRange: [5, 5],
+      baseSpeed: 205,
+      telegraph: 0.22,
+      buildDeltas: function(count){
+        var sequence = [1, 1, 1, 3, -2];
+        var deltas = [];
+        for(var i=1;i<count;i++){
+          deltas.push(sequence[i - 1]);
+        }
+        return deltas;
+      }
+    }),
+    gateTrain: createDeltaPattern({
+      key: 'gateTrain',
+      label: 'GATE TRAIN',
+      tag: 'gate-train',
+      lengthRange: [4, 5],
+      baseSpeed: 170,
+      telegraph: 0.3,
+      buildDeltas: function(count){
+        var base = [0, 2, 0, 2];
+        var deltas = [];
+        for(var i=1;i<count;i++){
+          var idx = i - 1;
+          deltas.push(base[idx] !== undefined ? base[idx] : 2);
+        }
+        return deltas;
+      }
+    })
   };
 
   var PATTERN_SEQUENCE = Object.keys(PATTERN_BUILDERS);
@@ -1259,6 +1321,7 @@
 
     bindEvents();
 
+    primeFonts();
     prepareReadyState();
     hideOverlay();
 
