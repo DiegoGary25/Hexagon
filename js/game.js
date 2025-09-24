@@ -89,6 +89,14 @@
     spawnRadiusDevice = spawnRadiusCss * dpr;
   }
 
+  function getFrameRotation(){
+    return TUNE.ENABLE_ARENA_SPIN ? worldSpinAngle : 0;
+  }
+
+  function getFrameZoom(){
+    return TUNE.ENABLE_ARENA_ZOOM ? worldZoom : 1;
+  }
+
   refreshArenaMetrics();
 
   function buildPalette(){
@@ -148,6 +156,7 @@
   var bannerTimer = 0;
   var bannerActive = false;
   var tiltTimer = 0;
+  var prevMovementIntent = false;
 
   var rings = [];
   var ringPool = [];
@@ -172,6 +181,7 @@
       sides: 0,
       segAngle: 0,
       phase: PHASE_OFFSET_RAD,
+      angleOffset: 0,
       gapIndices: [],
       gapOpen: [],
       color: '#ffffff',
@@ -211,6 +221,7 @@
     ring.sides = 0;
     ring.segAngle = 0;
     ring.phase = PHASE_OFFSET_RAD;
+    ring.angleOffset = 0;
     ring.gapIndices.length = 0;
     ring.gapOpen.length = 0;
     ring.speedPxPerS = 0;
@@ -234,6 +245,7 @@
       ring.sides = 0;
       ring.segAngle = 0;
       ring.phase = PHASE_OFFSET_RAD;
+      ring.angleOffset = 0;
       ring.gapIndices.length = 0;
       ring.gapOpen.length = 0;
       ring.speedPxPerS = 0;
@@ -307,28 +319,23 @@
   }
 
   function showBanner(text){
+    bannerTimer = 0;
+    bannerActive = false;
     if(!banner){ return; }
-    banner.textContent = text;
-    banner.classList.remove('hidden');
-    banner.classList.add('show');
-    bannerTimer = 1.2;
-    bannerActive = true;
+    banner.textContent = '';
+    banner.classList.add('hidden');
+    banner.classList.remove('show');
   }
 
   function hideBanner(){
+    bannerTimer = 0;
+    bannerActive = false;
     if(!banner){ return; }
     banner.classList.remove('show');
     banner.classList.add('hidden');
-    bannerActive = false;
   }
 
-  function updateBanner(dt){
-    if(!bannerActive){ return; }
-    bannerTimer -= dt;
-    if(bannerTimer <= 0){
-      hideBanner();
-    }
-  }
+  function updateBanner(){ }
 
   function showOverlay(msg){
     if(!overlay){ return; }
@@ -357,7 +364,8 @@
     ring.sides = sides;
     ring.segAngle = TAU / sides;
     var angleOffset = typeof info.angleOffset === 'number' ? info.angleOffset : 0;
-    ring.phase = math.normAngle(PHASE_OFFSET_RAD + angleOffset);
+    ring.angleOffset = angleOffset;
+    ring.phase = PHASE_OFFSET_RAD + angleOffset;
     var speed = typeof info.speed === 'number' ? info.speed : 120;
     ring.speedPxPerS = speed * dpr;
     if(!PALETTE || PALETTE.length === 0){
@@ -473,7 +481,7 @@
     if(!ring.moving || ring.dead){ return false; }
     if(ring.sides <= 0 || ring.segAngle <= 0){ return false; }
 
-    var zoom = worldZoom;
+    var zoom = getFrameZoom();
     var rOuter = Math.max(0, ring.radiusOuter) * zoom;
     var rInner = Math.max(0, ring.radiusInner) * zoom;
     var playerRadius = TUNE.PLAYER_ORBIT_RADIUS_PX * dpr * zoom;
@@ -488,8 +496,7 @@
     var playerHalfAng = Math.atan2(halfChord, Math.max(playerRadius, halfChord + 1));
 
     var aWorld = math.normAngle(player.angle);
-    var aFrame = math.normAngle(aWorld - worldSpinAngle);
-    var localAngle = math.normAngle(aFrame - ring.phase);
+    var localAngle = math.normAngle(aWorld - ring.phase);
     var seg = ring.segAngle;
     var angPad = playerHalfAng + TUNE.COLLISION_ANGULAR_EPS_RAD;
     var gaps = ring.gapIndices;
@@ -645,8 +652,7 @@
     var seg = candidate.segAngle;
     if(seg <= 0 || candidate.sides <= 0){ return; }
     var aWorld = math.normAngle(player.angle);
-    var aFrame = math.normAngle(aWorld - worldSpinAngle);
-    var aRel = math.normAngle(aFrame - candidate.phase);
+    var aRel = math.normAngle(aWorld - candidate.phase);
     var idx = Math.floor(aRel / seg) % candidate.sides;
     if(idx < 0){ idx += candidate.sides; }
     var primaryGap = candidate.gapIndices.length > 0 ? candidate.gapIndices[0] : 0;
@@ -817,11 +823,13 @@
     renderBackground(globalTime);
     ctx.save();
     ctx.translate(CENTER_X, CENTER_Y);
-    if(TUNE.ENABLE_ARENA_SPIN){
-      ctx.rotate(worldSpinAngle);
+    var frameRotation = getFrameRotation();
+    if(frameRotation !== 0){
+      ctx.rotate(frameRotation);
     }
-    if(TUNE.ENABLE_ARENA_ZOOM){
-      ctx.scale(worldZoom, worldZoom);
+    var frameZoom = getFrameZoom();
+    if(frameZoom !== 1){
+      ctx.scale(frameZoom, frameZoom);
     }
     renderArenaPolygon();
     renderRings();
@@ -1160,6 +1168,7 @@
     setState('READY');
     isStarting = false;
     colorIndex = 0;
+    prevMovementIntent = input.left() || input.right();
   }
 
   function startRun(){
@@ -1255,6 +1264,14 @@
     updateMultiplierTimers(dt);
     handleMuteInput();
     pollStartIntent();
+    var movementIntent = input.left() || input.right();
+    if(state === 'READY' && movementIntent && !prevMovementIntent){
+      startRun();
+      if(state === 'RUN'){
+        audio.playStart();
+      }
+    }
+    prevMovementIntent = movementIntent;
 
     if(state === 'RUN'){
       updateRun(dt);
